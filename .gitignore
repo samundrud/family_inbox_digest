@@ -209,5 +209,16 @@ __marimo__/
 # macOS
 .DS_Store
 
+# Firebase deploy cache
+.firebase/
+
 # Other
 ignored/
+/credentials.json
+
+# Docs containing private email addresses and account IDs
+docs/SERVICES.md
+docs/family-inbox-build-plan-v3-definitive.md
+
+# One-time setup script with family-specific info (school names, org details)
+backend/linear_setup.py
