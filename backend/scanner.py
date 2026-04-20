@@ -353,17 +353,34 @@ def merge_data(existing: dict, new_events: list[dict], new_digest_groups: list[d
     """Merge new Claude results into existing JSONBin data.
 
     Merge rules:
-    - Events: always keep dismissed/manually_added events; add new events
-      whose id is not already present (no duplicates).
+    - Events: keep ALL existing events; add new events not already present by id;
+      auto-expire events more than 7 days past their date unless manually_added.
     - DigestGroups: replace entirely with new Claude results.
     - lastScanned: always updated to current UTC timestamp.
     """
-    kept_events: list[dict] = [
-        e for e in existing.get("events", [])
-        if e.get("dismissed") or e.get("manually_added")
-    ]
+    cutoff = date.today() - timedelta(days=7)
 
-    existing_ids = {e["id"] for e in existing.get("events", [])}
+    # Keep all existing events, expiring only old auto-generated ones.
+    kept_events: list[dict] = []
+    expired = 0
+    for e in existing.get("events", []):
+        if e.get("manually_added"):
+            kept_events.append(e)
+            continue
+        event_date_str = e.get("date", "")
+        try:
+            event_date = date.fromisoformat(event_date_str)
+            if event_date < cutoff:
+                expired += 1
+                continue
+        except (ValueError, TypeError):
+            pass
+        kept_events.append(e)
+
+    if expired:
+        log.info("Auto-expired %d event(s) more than 7 days past their date", expired)
+
+    existing_ids = {e["id"] for e in kept_events}
     added_events: list[dict] = [e for e in new_events if e["id"] not in existing_ids]
 
     merged_events = kept_events + added_events
