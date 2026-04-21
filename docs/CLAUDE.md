@@ -16,6 +16,32 @@ Results are stored in JSONBin.io. A React SPA reads JSONBin and displays everyth
 
 ---
 
+## Scanner flow
+
+```mermaid
+flowchart TD
+    Start([Scanner starts]) --> Auth["Authenticate Gmail\n(token.json · OAuth2)"]
+    Auth --> Fetch["Fetch emails since lastScanned\n(fallback: newer_than:7d)"]
+    Fetch --> Empty{0 emails?}
+    Empty -->|yes| UpdateTS["Update lastScanned\nin JSONBin"]
+    UpdateTS --> Done1([Done])
+    Empty -->|no| Claude["Send emails to Claude API\n(claude-sonnet-4-6)"]
+    Claude --> Parse["Parse response →\nevents + digest groups"]
+    Parse --> Read["Read existing data\nfrom JSONBin"]
+    Read --> Merge["Merge events:\n① Keep all existing\n② Add new by ID\n③ Auto-expire >7 days old\n④ Never remove manually_added"]
+    Merge --> Saturday{"Saturday or\n--send-digest?"}
+    Saturday -->|yes| FullDigest["Regenerate digest groups\nfrom full 7-day window"]
+    Saturday -->|no| IncrDigest["Append new bullets\nto existing digest groups"]
+    FullDigest --> Write["Write merged data\nto JSONBin"]
+    IncrDigest --> Write
+    Write --> SendEmail{"Send digest\nemail?"}
+    SendEmail -->|yes| Email["Gmail SMTP\n→ both parents"]
+    SendEmail -->|no| Done2([Done])
+    Email --> Done2
+```
+
+---
+
 ## Stack
 
 | Layer | Technology |

@@ -103,7 +103,7 @@ export default function AddEventForm({ onAdd, onClose }) {
             <input
               value={form.source}
               onChange={(e) => set('source', e.target.value)}
-              placeholder="e.g. Dentist"
+              placeholder="e.g. Sarah"
               style={inputStyle}
             />
           </Field>

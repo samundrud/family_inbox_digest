@@ -9,16 +9,24 @@ A private family dashboard that reads a dedicated Gmail inbox where school and a
 
 ## Architecture
 
-```
-Gmail inbox (configured in FAMILY_INBOX_EMAIL)
-    ↓  Gmail API (OAuth2)
-backend/scanner.py
-    ↓  Anthropic API (Claude Sonnet)
-    ↓  JSONBin REST API (data store)
-    ↓  Gmail SMTP (Saturday digest email)
-frontend/ (React + Vite)
-    ↓  reads JSONBin directly from browser
-Firebase Hosting (static, public URL)
+```mermaid
+flowchart LR
+    Gmail["📧 Gmail inbox\n(family forwarding account)"]
+    Scanner["🖥️ scanner.py\n(Mac · launchd · 7am daily)"]
+    Claude["🤖 Claude Sonnet\n(Anthropic API)"]
+    JSONBin["🗄️ JSONBin.io\n(data store)"]
+    Frontend["📱 React SPA\n(Firebase Hosting)"]
+    DigestEmail["📋 Digest email\n(Saturday)"]
+    Parents["👨‍👩‍👧‍👦 Parents"]
+
+    Gmail -->|"Gmail API · OAuth2"| Scanner
+    Scanner -->|"emails"| Claude
+    Claude -->|"events + digest groups"| Scanner
+    Scanner -->|"PUT"| JSONBin
+    JSONBin -->|"GET · browser"| Frontend
+    Frontend <-->|"view · add · edit · dismiss"| Parents
+    Scanner -->|"Gmail SMTP · Saturday"| DigestEmail
+    DigestEmail --> Parents
 ```
 
 The scanner runs daily at 7am via Mac launchd. The frontend is a static SPA — no server required.
