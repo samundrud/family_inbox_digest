@@ -43,6 +43,26 @@ export default function App() {
   const [filter, setFilter]           = useState('all')
   const [showAddForm, setShowAddForm] = useState(false)
   const [editingEventId, setEditingEventId] = useState(null)
+  const [pinUnlocked, setPinUnlocked] = useState(false)
+  const [showPinModal, setShowPinModal] = useState(false)
+  const [pendingAction, setPendingAction] = useState(null)
+
+  function requirePin(action) {
+    if (pinUnlocked) { action(); return }
+    setPendingAction(() => action)
+    setShowPinModal(true)
+  }
+
+  function onPinSuccess() {
+    setPinUnlocked(true)
+    setShowPinModal(false)
+    setPendingAction((prev) => { prev?.(); return null })
+  }
+
+  function onPinCancel() {
+    setShowPinModal(false)
+    setPendingAction(null)
+  }
 
   async function reload() {
     try {
@@ -140,7 +160,7 @@ export default function App() {
     <>
       <AppHeader
         lastScannedLabel={lastScannedLabel}
-        onAddClick={() => setShowAddForm(true)}
+        onAddClick={() => requirePin(() => setShowAddForm(true))}
       />
 
       <div className="fadein" style={{ maxWidth: 820, margin: '0 auto', padding: '22px 16px' }}>
@@ -181,6 +201,7 @@ export default function App() {
                     onEdit={handleUpdate}
                     onEditStart={setEditingEventId}
                     onEditCancel={() => setEditingEventId(null)}
+                    requirePin={requirePin}
                   />
                 ))
             }
@@ -201,6 +222,10 @@ export default function App() {
 
       {showAddForm && (
         <AddEventForm onAdd={handleAdd} onClose={() => setShowAddForm(false)} />
+      )}
+
+      {showPinModal && (
+        <PinModal onSuccess={onPinSuccess} onCancel={onPinCancel} />
       )}
     </>
   )
@@ -254,5 +279,58 @@ function EmptyState({ text }) {
     <p style={{ color: 'var(--muted)', textAlign: 'center', padding: '32px 0', fontSize: 15 }}>
       {text}
     </p>
+  )
+}
+
+function PinModal({ onSuccess, onCancel }) {
+  const [pin, setPin]     = useState('')
+  const [error, setError] = useState(false)
+  const EXPECTED = import.meta.env.VITE_APP_PIN || ''
+
+  function handleSubmit(e) {
+    e.preventDefault()
+    if (pin === EXPECTED) { onSuccess() }
+    else { setError(true); setPin('') }
+  }
+
+  return (
+    <div
+      onClick={onCancel}
+      style={{ position: 'fixed', inset: 0, background: '#000000bb', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300 }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{ background: '#1a1a24', border: '1px solid #26263a', borderRadius: 16, padding: '28px 24px', width: '90%', maxWidth: 320 }}
+      >
+        <h2 style={{ margin: '0 0 6px', fontSize: 18, fontWeight: 700, color: '#eaeaf4' }}>Enter PIN</h2>
+        <p style={{ margin: '0 0 20px', fontSize: 13, color: '#9090a8' }}>Required to make changes</p>
+        <form onSubmit={handleSubmit}>
+          <input
+            autoFocus
+            type="password"
+            inputMode="numeric"
+            value={pin}
+            onChange={(e) => { setPin(e.target.value); setError(false) }}
+            placeholder="••••"
+            style={{
+              width: '100%', boxSizing: 'border-box',
+              background: '#26263a', border: `1px solid ${error ? '#f87171' : '#3a3a52'}`,
+              borderRadius: 8, color: '#eaeaf4', fontSize: 20,
+              letterSpacing: '0.3em', padding: '10px 12px', outline: 'none',
+              textAlign: 'center',
+            }}
+          />
+          {error && <div style={{ fontSize: 12, color: '#f87171', marginTop: 6, textAlign: 'center' }}>Incorrect PIN</div>}
+          <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+            <button type="submit" style={{ flex: 1, background: 'var(--accent)', border: 'none', borderRadius: 10, color: '#000', cursor: 'pointer', fontSize: 15, fontWeight: 700, padding: '12px 0', minHeight: 44 }}>
+              Unlock
+            </button>
+            <button type="button" onClick={onCancel} style={{ flex: 1, background: '#26263a', border: 'none', borderRadius: 10, color: '#9090a8', cursor: 'pointer', fontSize: 15, padding: '12px 0', minHeight: 44 }}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   )
 }

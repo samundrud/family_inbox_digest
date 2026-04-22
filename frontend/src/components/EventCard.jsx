@@ -31,7 +31,7 @@ const categoryColors = {
   other:          '#9090a8',
 }
 
-export default function EventCard({ event, onDismiss, onDelete, onEdit, isEditing, onEditStart, onEditCancel }) {
+export default function EventCard({ event, onDismiss, onDelete, onEdit, isEditing, onEditStart, onEditCancel, requirePin }) {
   const [form, setForm] = useState({
     title:    event.title    || '',
     date:     event.date     || '',
@@ -131,9 +131,6 @@ export default function EventCard({ event, onDismiss, onDelete, onEdit, isEditin
           }}>
             {event.title}
           </span>
-          {!dismissed && event.priority === 'high' && (
-            <span style={{ fontSize: 10, fontWeight: 700, background: '#3d1a1a', color: '#f87171', borderRadius: 4, padding: '2px 6px', letterSpacing: '0.05em' }}>URGENT</span>
-          )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 11, fontWeight: 600, color: tagColor, background: tagColor + '22', borderRadius: 4, padding: '2px 7px' }}>
@@ -162,13 +159,13 @@ export default function EventCard({ event, onDismiss, onDelete, onEdit, isEditin
         </div>
       ) : (
         <div className="event-actions" style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0 }}>
-          {!dismissed && <button title="Edit" onClick={() => onEditStart(event.id)} style={iconBtnStyle}>✎</button>}
+          {!dismissed && <button title="Edit" onClick={() => requirePin(() => onEditStart(event.id))} style={iconBtnStyle}>✎</button>}
           {!dismissed && (
-            <button title="Mark as done" onClick={() => setConfirming('dismiss')} style={iconBtnStyle}>✓</button>
+            <button title="Mark as done" onClick={() => requirePin(() => setConfirming('dismiss'))} style={iconBtnStyle}>✓</button>
           )}
           <button
             title="Delete"
-            onClick={() => setConfirming('delete')}
+            onClick={() => requirePin(() => setConfirming('delete'))}
             style={{ ...iconBtnStyle, color: '#f87171' }}
           >✕</button>
         </div>
