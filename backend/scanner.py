@@ -90,6 +90,7 @@ def get_gmail_service():
 
 _MAX_EMAILS = 30
 _MAX_LOOKBACK_DAYS = 30
+_DIGEST_WINDOW_DAYS = 14
 
 
 def _decode_body(data: str) -> str:
@@ -263,7 +264,7 @@ Omit: purely informational content with no action required and no specific date 
   - source: sender organization name
   - category: one of: school, daycare, scouts, soccer, GFT, other
   - week_of: ISO date of Monday of the current week (YYYY-MM-DD)
-  - bullets: array of 3-5 strings. Each is a specific, useful update — what kids are learning, classroom news, coach updates, schedule changes, reminders, event recaps. Write as a parent would want to read. Be specific. BAD: "The teacher sent an update." GOOD: "Ms. Chen's class finished their weather unit and began ecosystems — ask your child about the terrarium they built."
+  - bullets: array of 3-5 strings. Focus on NARRATIVE context — what kids are learning, classroom news, coach updates, event recaps, what to expect. Do NOT repeat specific dates or deadlines you already captured in the events array above; those are surfaced to parents separately. Instead provide the story behind the event: what it is, why it matters, what to prepare. Be specific. BAD: "There is a Pro-D Day on April 27." GOOD: "A professional development day is coming up — a good time to arrange alternative childcare or activities for the kids." BAD: "The teacher sent an update." GOOD: "Ms. Chen's class finished their weather unit and began ecosystems — ask your child about the terrarium they built."
 
 Return ONLY valid JSON. No markdown fences. No preamble. No explanation.\
 """
@@ -509,58 +510,183 @@ def _monday_of_week(ref: date) -> date:
     return ref - timedelta(days=ref.weekday())
 
 
-def _format_event_line(event: dict) -> str:
-    """Format a single event as two lines for the digest body."""
-    try:
-        d = datetime.strptime(event["date"], "%Y-%m-%d").date()
-        date_str = d.strftime("%A, %B %-d")
-    except (ValueError, KeyError):
-        date_str = event.get("date", "TBD")
-
-    title = event.get("title", "")
-    source = event.get("source", "")
-    notes = event.get("notes", "")
-    return f"• {title} — {date_str} | {source}\n  {notes}"
-
-
-def _build_digest_body(events: list[dict], digest_groups: list[dict]) -> str:
+def _build_digest_html(events: list[dict], digest_groups: list[dict]) -> str:
     today = date.today()
     monday = _monday_of_week(today)
-    lines: list[str] = []
+    cutoff = today + timedelta(days=_DIGEST_WINDOW_DAYS)
+    week_str = monday.strftime("%B %-d, %Y")
 
-    # --- Upcoming events section ---
-    actionable = [
-        e for e in events
-        if not e.get("dismissed")
-    ]
-    actionable.sort(key=lambda e: e.get("date", "9999-99-99"))
+    # --- Upcoming events: next 14 days, dateless always included ---
+    upcoming: list[dict] = []
+    for e in events:
+        if e.get("dismissed"):
+            continue
+        event_date = e.get("date")
+        if event_date:
+            try:
+                if date.fromisoformat(event_date) <= cutoff:
+                    upcoming.append(e)
+            except ValueError:
+                pass
+        else:
+            upcoming.append(e)
+    upcoming.sort(key=lambda e: e.get("date") or "9999-99-99")
 
-    lines.append("COMING UP THIS WEEK")
-    if actionable:
-        for event in actionable:
-            lines.append(_format_event_line(event))
-    else:
-        lines.append("  Nothing urgent on the calendar this week.")
+    by_category: dict[str, list[dict]] = {}
+    for e in upcoming:
+        by_category.setdefault(e.get("category", "other"), []).append(e)
 
-    lines.append("")
-    lines.append("─" * 48)
-    lines.append("")
-    lines.append("THIS WEEK'S UPDATES FROM YOUR INBOX")
-    lines.append("")
+    events_parts: list[str] = []
+    for cat in CATEGORIES:
+        if cat not in by_category:
+            continue
+        meta = CATEGORIES[cat]
+        color = meta["color"]
+        icon = meta["icon"]
+        cards = ""
+        for ev in by_category[cat]:
+            try:
+                d = datetime.strptime(ev["date"], "%Y-%m-%d").date()
+                date_str = d.strftime("%A, %B %-d")
+            except (ValueError, KeyError, TypeError):
+                date_str = ev.get("date") or "No date set"
+            title = html.escape(ev.get("title", ""))
+            source = html.escape(ev.get("source", ""))
+            notes = ev.get("notes", "")
+            notes_html = (
+                f'<div style="font-size:13px;color:#555;margin-top:6px;">{html.escape(notes)}</div>'
+                if notes else ""
+            )
+            cards += f"""
+              <div style="border-left:3px solid {color};padding:10px 14px;margin-bottom:8px;background:#f8f9ff;border-radius:0 6px 6px 0;">
+                <div style="font-weight:600;font-size:14px;color:#111;">{title}</div>
+                <div style="font-size:12px;color:#888;margin-top:3px;">{date_str} &middot; {source}</div>
+                {notes_html}
+              </div>"""
+        events_parts.append(f"""
+          <div style="margin-bottom:20px;">
+            <div style="margin-bottom:10px;">
+              <span style="font-size:14px;">{icon}</span>
+              <span style="font-size:11px;font-weight:700;letter-spacing:0.8px;color:{color};text-transform:uppercase;vertical-align:middle;margin-left:4px;">{cat}</span>
+            </div>
+            {cards}
+          </div>""")
 
-    # --- Digest groups section ---
+    events_section = "\n".join(events_parts) if events_parts else (
+        f'<p style="color:#999;font-size:13px;margin:0;">Nothing on the calendar in the next {_DIGEST_WINDOW_DAYS} days.</p>'
+    )
+
+    # --- Digest groups ---
+    groups_parts: list[str] = []
     for group in digest_groups:
-        category = group.get("category", "other")
-        icon = CATEGORIES.get(category, CATEGORIES["other"])["icon"]
-        source = group.get("source", "").upper()
-        lines.append(f"{icon} {source}")
-        for bullet in group.get("bullets", []):
-            lines.append(f"› {bullet}")
-        lines.append("")
+        cat = group.get("category", "other")
+        meta = CATEGORIES.get(cat, CATEGORIES["other"])
+        color = meta["color"]
+        icon = meta["icon"]
+        source = html.escape(group.get("source", ""))
+        bullets = "".join(
+            f'<li style="margin-bottom:6px;">{html.escape(b)}</li>'
+            for b in group.get("bullets", [])
+        )
+        groups_parts.append(f"""
+          <div style="margin-bottom:24px;">
+            <div style="margin-bottom:10px;">
+              <span style="font-size:14px;">{icon}</span>
+              <span style="font-size:11px;font-weight:700;letter-spacing:0.8px;color:{color};text-transform:uppercase;vertical-align:middle;margin-left:4px;">{source}</span>
+            </div>
+            <ul style="margin:0;padding-left:18px;color:#333;font-size:13px;line-height:1.7;">
+              {bullets}
+            </ul>
+          </div>""")
 
-    lines.append("─" * 48)
-    lines.append(f"Family Inbox Intelligence  •  Week of {monday.strftime('%B %-d, %Y')}")
-    return "\n".join(lines)
+    groups_section = "\n".join(groups_parts) if groups_parts else (
+        '<p style="color:#999;font-size:13px;margin:0;">No updates from your inbox this week.</p>'
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+</head>
+<body style="margin:0;padding:0;background:#f0f2f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;">
+  <div style="max-width:600px;margin:0 auto;padding:24px 16px;">
+
+    <div style="background:#1a1a2e;border-radius:12px;padding:24px;margin-bottom:16px;text-align:center;">
+      <div style="color:#fff;font-size:20px;font-weight:700;">&#x1F4CB; Family Inbox</div>
+      <div style="color:#9090a8;font-size:13px;margin-top:6px;">Week of {week_str}</div>
+    </div>
+
+    <div style="background:#fff;border-radius:12px;padding:24px;margin-bottom:16px;">
+      <div style="font-size:11px;font-weight:700;letter-spacing:1px;color:#bbb;text-transform:uppercase;margin-bottom:20px;">Coming Up &mdash; Next {_DIGEST_WINDOW_DAYS} Days</div>
+      {events_section}
+    </div>
+
+    <div style="background:#fff;border-radius:12px;padding:24px;margin-bottom:16px;">
+      <div style="font-size:11px;font-weight:700;letter-spacing:1px;color:#bbb;text-transform:uppercase;margin-bottom:20px;">This Week&#x2019;s Updates From Your Inbox</div>
+      {groups_section}
+    </div>
+
+    <div style="text-align:center;color:#bbb;font-size:11px;padding:8px;">
+      Family Inbox Intelligence &middot; Week of {week_str}
+    </div>
+
+  </div>
+</body>
+</html>"""
+
+
+def _build_reminder_html(tomorrow_events: list[dict], tomorrow: date) -> str:
+    tomorrow_str = tomorrow.strftime("%A, %B %-d")
+    cards = ""
+    for ev in tomorrow_events:
+        cat = ev.get("category", "other")
+        meta = CATEGORIES.get(cat, CATEGORIES["other"])
+        color = meta["color"]
+        icon = meta["icon"]
+        title = html.escape(ev.get("title", ""))
+        source = html.escape(ev.get("source", ""))
+        notes = ev.get("notes", "")
+        notes_html = (
+            f'<div style="font-size:13px;color:#555;margin-top:8px;">{html.escape(notes)}</div>'
+            if notes else ""
+        )
+        cards += f"""
+      <div style="border-left:3px solid {color};padding:12px 16px;margin-bottom:12px;background:#f8f9ff;border-radius:0 8px 8px 0;">
+        <div style="margin-bottom:4px;">
+          <span style="font-size:13px;">{icon}</span>
+          <span style="font-size:11px;font-weight:700;letter-spacing:0.5px;color:{color};text-transform:uppercase;vertical-align:middle;margin-left:4px;">{cat}</span>
+        </div>
+        <div style="font-weight:600;font-size:15px;color:#111;">{title}</div>
+        <div style="font-size:12px;color:#888;margin-top:3px;">{source}</div>
+        {notes_html}
+      </div>"""
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+</head>
+<body style="margin:0;padding:0;background:#f0f2f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;">
+  <div style="max-width:600px;margin:0 auto;padding:24px 16px;">
+
+    <div style="background:#1a1a2e;border-radius:12px;padding:24px;margin-bottom:16px;text-align:center;">
+      <div style="color:#9090a8;font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px;">Heads Up</div>
+      <div style="color:#fff;font-size:20px;font-weight:700;">&#x1F4C5; Tomorrow &mdash; {tomorrow_str}</div>
+    </div>
+
+    <div style="background:#fff;border-radius:12px;padding:24px;margin-bottom:16px;">
+      {cards}
+    </div>
+
+    <div style="text-align:center;color:#bbb;font-size:11px;padding:8px;">
+      Family Inbox Intelligence
+    </div>
+
+  </div>
+</body>
+</html>"""
 
 
 def send_digest_email(events: list[dict], digest_groups: list[dict], force: bool = False) -> None:
@@ -580,9 +706,9 @@ def send_digest_email(events: list[dict], digest_groups: list[dict], force: bool
 
     monday = _monday_of_week(date.today())
     subject = f"📋 Family Inbox — Week of {monday.strftime('%B %-d, %Y')}"
-    body = _build_digest_body(events, digest_groups)
+    body = _build_digest_html(events, digest_groups)
 
-    msg = MIMEText(body, "plain", "utf-8")
+    msg = MIMEText(body, "html", "utf-8")
     msg["Subject"] = subject
     msg["From"] = FAMILY_INBOX_EMAIL
     msg["To"] = ", ".join(DIGEST_RECIPIENTS)
@@ -595,6 +721,67 @@ def send_digest_email(events: list[dict], digest_groups: list[dict], force: bool
         smtp.sendmail(FAMILY_INBOX_EMAIL, DIGEST_RECIPIENTS, msg.as_string())
 
     log.info("Digest email sent — subject: %s", subject)
+
+
+def send_reminder_email(events: list[dict], force: bool = False) -> None:
+    """Send a day-before reminder for events happening tomorrow.
+
+    Fires every day a scan runs. Skipped silently if nothing is tomorrow,
+    unless force=True (sends even when empty, for SMTP testing).
+    """
+    tomorrow = date.today() + timedelta(days=1)
+    tomorrow_events = [
+        e for e in events
+        if not e.get("dismissed") and e.get("date") == tomorrow.isoformat()
+    ]
+
+    if not tomorrow_events and not force:
+        log.info("No events tomorrow (%s) — skipping reminder email", tomorrow.isoformat())
+        return
+
+    if not tomorrow_events:
+        log.info("Force-sending reminder with no tomorrow events (SMTP test)")
+        subject = f"📅 Tomorrow: nothing scheduled ({tomorrow.strftime('%B %-d')})"
+        tomorrow_str = tomorrow.strftime("%A, %B %-d")
+        body = f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;background:#f0f2f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;">
+  <div style="max-width:600px;margin:0 auto;padding:24px 16px;">
+    <div style="background:#1a1a2e;border-radius:12px;padding:24px;margin-bottom:16px;text-align:center;">
+      <div style="color:#9090a8;font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px;">Heads Up</div>
+      <div style="color:#fff;font-size:20px;font-weight:700;">&#x1F4C5; Tomorrow &mdash; {tomorrow_str}</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:24px;margin-bottom:16px;text-align:center;">
+      <p style="color:#999;font-size:13px;margin:0;">Nothing scheduled for tomorrow.</p>
+    </div>
+    <div style="text-align:center;color:#bbb;font-size:11px;padding:8px;">Family Inbox Intelligence</div>
+  </div>
+</body></html>"""
+    else:
+        subject = (
+            f"📅 Tomorrow: {tomorrow_events[0]['title']}"
+            if len(tomorrow_events) == 1
+            else f"📅 Tomorrow: {len(tomorrow_events)} events"
+        )
+        body = _build_reminder_html(tomorrow_events, tomorrow)
+
+    msg = MIMEText(body, "html", "utf-8")
+    msg["Subject"] = subject
+    msg["From"] = FAMILY_INBOX_EMAIL
+    msg["To"] = ", ".join(DIGEST_RECIPIENTS)
+
+    log.info(
+        "Sending reminder email (%d event(s) tomorrow) to: %s",
+        len(tomorrow_events),
+        ", ".join(DIGEST_RECIPIENTS),
+    )
+    with smtplib.SMTP("smtp.gmail.com", 587) as smtp:
+        smtp.ehlo()
+        smtp.starttls()
+        smtp.login(FAMILY_INBOX_EMAIL, GMAIL_APP_PASSWORD)
+        smtp.sendmail(FAMILY_INBOX_EMAIL, DIGEST_RECIPIENTS, msg.as_string())
+
+    log.info("Reminder email sent — subject: %s", subject)
 
 
 # ---------------------------------------------------------------------------
@@ -700,6 +887,7 @@ def main() -> None:
     args = set(sys.argv[1:])
     dry_run = "--dry-run" in args
     force_digest = "--send-digest" in args
+    force_reminder = "--send-reminder" in args
 
     log.info("=== Family Inbox Scanner starting ===%s", " (DRY RUN)" if dry_run else "")
 
@@ -723,37 +911,36 @@ def main() -> None:
     # Step 4: fetch emails
     emails = fetch_emails(service, last_scanned=last_scanned)
 
-    # Step 5: no emails — update lastScanned and exit
-    if not emails:
-        log.info("No emails found, exiting")
-        if not dry_run:
-            existing["lastScanned"] = datetime.now(timezone.utc).isoformat()
-            write_jsonbin(existing)
+    # Step 5: process new emails if any, otherwise use existing data
+    if emails:
+        analysis = analyze_emails(emails)
+        final_data = merge_data(existing, analysis["events"], analysis["digestGroups"])
+        final_data["events"] = dedup_events(final_data["events"])
+    else:
+        log.info("No new emails found")
+        existing["lastScanned"] = datetime.now(timezone.utc).isoformat()
+        final_data = existing
+
+    # Step 6: write (or dry-run print)
+    if dry_run:
+        log.info("DRY RUN — would write the following to JSONBin:")
+        print(json.dumps(final_data, indent=2, ensure_ascii=False))
         log.info("=== Scan complete ===")
         return
 
-    # Step 6: analyze with Claude
-    analysis = analyze_emails(emails)
-    new_events = analysis["events"]
-    new_digest_groups = analysis["digestGroups"]
+    write_jsonbin(final_data)
 
-    # Step 7: merge
-    merged = merge_data(existing, new_events, new_digest_groups)
+    # Step 7: day-before reminder (fires every run)
+    send_reminder_email(final_data["events"], force=force_reminder)
 
-    # Step 8: dedup
-    merged["events"] = dedup_events(merged["events"])
-
-    # Step 9: write (or dry-run print)
-    if dry_run:
-        log.info("DRY RUN — would write the following to JSONBin:")
-        print(json.dumps(merged, indent=2, ensure_ascii=False))
-    else:
-        write_jsonbin(merged)
-
-    # Step 10: digest email
+    # Step 8: Saturday digest
     today_name = date.today().strftime("%A")
     if force_digest or today_name == DIGEST_DAY:
-        send_digest_email(merged["events"], merged["digestGroups"], force=force_digest)
+        send_digest_email(
+            final_data["events"],
+            final_data.get("digestGroups", []),
+            force=force_digest,
+        )
 
     log.info("=== Scan complete ===")
 
@@ -781,6 +968,28 @@ def _test_dedup():
     log.info("Dedup pass complete — %d duplicate(s) removed, %d kept", removed, len(deduped))
     print(json.dumps(deduped, indent=2, ensure_ascii=False))
     log.info("=== Dedup test passed ===")
+
+
+def _test_reminder():
+    """Preview tomorrow's reminder email body without sending (read-only)."""
+    log.info("=== Reminder test starting ===")
+    data = read_jsonbin()
+    events = data.get("events", [])
+    tomorrow = date.today() + timedelta(days=1)
+    tomorrow_events = [
+        e for e in events
+        if not e.get("dismissed") and e.get("date") == tomorrow.isoformat()
+    ]
+    log.info(
+        "Tomorrow (%s): %d event(s) would trigger a reminder",
+        tomorrow.isoformat(),
+        len(tomorrow_events),
+    )
+    for ev in tomorrow_events:
+        log.info("  • %s (%s) — %s", ev.get("title"), ev.get("source"), ev.get("notes", ""))
+    if not tomorrow_events:
+        log.info("No reminder would fire tomorrow — use --send-reminder to force-send")
+    log.info("=== Reminder test passed ===")
 
 
 def _migrate_categories() -> None:
@@ -829,6 +1038,8 @@ if __name__ == "__main__":
         _reset_last_scanned()
     elif "--test-dedup" in sys.argv:
         _test_dedup()
+    elif "--test-reminder" in sys.argv:
+        _test_reminder()
     elif "--migrate-categories" in sys.argv:
         _migrate_categories()
     else:
