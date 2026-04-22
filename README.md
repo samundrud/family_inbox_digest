@@ -3,7 +3,7 @@
 A private family dashboard that reads a dedicated Gmail inbox where school and activity emails are forwarded. A Python scanner reads those emails, sends them to Claude, and extracts upcoming events and a weekly narrative digest. Results are stored in JSONBin and displayed in a React dashboard. Every Saturday morning a digest email is sent to both parents.
 
 **Users:** Two parents and their children.
-**Email sources:** Configured via `FAMILY_CONTEXT` and `ALLOWED_FORWARDERS` in `backend/.env`.
+**Email sources:** All emails in the dedicated Gmail inbox are scanned. Family context configured via `FAMILY_CONTEXT` in `backend/.env`.
 
 ---
 

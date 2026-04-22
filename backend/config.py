@@ -23,11 +23,6 @@ GMAIL_APP_PASSWORD: str = os.environ["GMAIL_APP_PASSWORD"]
 ANTHROPIC_API_KEY: str = os.environ["ANTHROPIC_API_KEY"]
 JSONBIN_BIN_ID: str = os.environ["JSONBIN_BIN_ID"]
 JSONBIN_API_KEY: str = os.environ["JSONBIN_API_KEY"]
-ALLOWED_FORWARDERS: set[str] = {
-    addr.strip().lower()
-    for addr in os.environ["ALLOWED_FORWARDERS"].split(",")
-    if addr.strip()
-}
 FAMILY_CONTEXT: str = os.environ["FAMILY_CONTEXT"]
 
 # --- Category metadata (used by scanner email body and frontend) ---

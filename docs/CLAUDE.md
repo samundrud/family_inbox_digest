@@ -12,7 +12,7 @@ Family Inbox Intelligence is a private family dashboard. A dedicated Gmail accou
 
 Results are stored in JSONBin.io. A React SPA reads JSONBin and displays everything. Both parents can view, add, edit, and dismiss events from their phones. Every Saturday a digest email is sent to both parents via Gmail SMTP.
 
-**Email sources:** Configured via `FAMILY_CONTEXT` and `ALLOWED_FORWARDERS` in `backend/.env`.
+**Email sources:** All emails in the dedicated Gmail inbox are scanned. Family context configured via `FAMILY_CONTEXT` in `backend/.env`.
 
 ---
 
@@ -188,7 +188,6 @@ Mobile-first. All interactive elements min 44px touch target height.
 | `JSONBIN_BIN_ID` | JSONBin bin ID |
 | `JSONBIN_API_KEY` | JSONBin master key (literal `$` signs — Python dotenv reads fine) |
 | `DIGEST_RECIPIENTS` | Comma-separated parent email addresses for Saturday digest |
-| `ALLOWED_FORWARDERS` | Comma-separated parent Gmail addresses that forward school emails |
 | `FAMILY_CONTEXT` | Free-text description of children's schools/providers passed to Claude |
 | `LINEAR_API_KEY` | Linear API key (only used by `linear_setup.py`) |
 | `LINEAR_TEAM_ID` | Linear team key, e.g. `FAM` |

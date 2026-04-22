@@ -21,7 +21,6 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
 from config import (
-    ALLOWED_FORWARDERS,
     ANTHROPIC_API_KEY,
     CATEGORIES,
     DIGEST_DAY,
@@ -89,9 +88,8 @@ def get_gmail_service():
 # Email fetching
 # ---------------------------------------------------------------------------
 
-# Loaded from config (ALLOWED_FORWARDERS env var) — filters to emails forwarded from parent accounts.
-
 _MAX_EMAILS = 30
+_MAX_LOOKBACK_DAYS = 30
 
 
 def _decode_body(data: str) -> str:
@@ -146,14 +144,32 @@ def _parse_sender(raw_from: str) -> tuple[str, str]:
     return name, addr
 
 
-def fetch_emails(service) -> list[dict]:
-    """Fetch recent emails forwarded from the parent accounts.
+def _build_time_query(last_scanned: datetime | None) -> str:
+    """Return the Gmail time-range clause for the search query.
 
+    Uses last_scanned with a 1-hour overlap buffer and caps lookback at
+    _MAX_LOOKBACK_DAYS. Falls back to SCAN_DAYS_BACK if no timestamp stored.
+    """
+    if last_scanned is None:
+        return f"newer_than:{SCAN_DAYS_BACK}d"
+
+    max_lookback = datetime.now(timezone.utc) - timedelta(days=_MAX_LOOKBACK_DAYS)
+    cutoff = max(last_scanned - timedelta(hours=1), max_lookback)
+    after_ts = int(cutoff.timestamp())
+    return f"after:{after_ts}"
+
+
+def fetch_emails(service, last_scanned: datetime | None = None) -> list[dict]:
+    """Fetch emails forwarded from the parent accounts.
+
+    Uses last_scanned as the Gmail after: cutoff (with a 1-hour overlap buffer),
+    falling back to SCAN_DAYS_BACK days if no timestamp is stored.
     Returns a list of dicts with keys:
         message_id, subject, sender_name, sender_email, date_received, body_text
     """
-    forwarder_query = " OR ".join(f"from:{addr}" for addr in sorted(ALLOWED_FORWARDERS))
-    query = f"newer_than:{SCAN_DAYS_BACK}d ({forwarder_query})"
+    time_clause = _build_time_query(last_scanned)
+    query = time_clause
+    log.info("Fetching emails — time filter: %s", time_clause)
 
     result = (
         service.users()
@@ -239,7 +255,8 @@ Return ONLY a valid JSON object with exactly two keys:
   - dismissed: false
   - manually_added: false
 
-Include: picture day, field trips, permission slip deadlines, signup/registration deadlines, belt tests, tournaments, Pro-D day closures, concerts, curriculum nights, fundraiser deadlines, any date requiring a parent to do something, personal reminders or family events sent directly by a parent, actionable items with no specific date (e.g. a form to return with no stated deadline) — include these with date: null.
+IMPORTANT: If a single email mentions multiple distinct dates or events (e.g. a Pro-D day AND an early dismissal), extract EACH as its own separate event entry. Never collapse two dates into one event.
+Include: picture day, field trips, permission slip deadlines, signup/registration deadlines, belt tests, tournaments, Pro-D day closures (no school = parent needs childcare), early dismissals (early pickup required), concerts, curriculum nights, fundraiser deadlines, any date requiring a parent to do something, personal reminders or family events sent directly by a parent, actionable items with no specific date (e.g. a form to return with no stated deadline) — include these with date: null.
 Omit: purely informational content with no action required and no specific date (e.g. general newsletters, weekly roundups with no deadlines or upcoming events).
 
 "digestGroups": Weekly narrative summary. Include one entry per school, daycare, or activity provider. Do NOT include entries for emails sent directly by a parent — those only appear in events. For each entry:
@@ -405,6 +422,85 @@ def merge_data(existing: dict, new_events: list[dict], new_digest_groups: list[d
 
 
 # ---------------------------------------------------------------------------
+# Claude dedup pass
+# ---------------------------------------------------------------------------
+
+_DEDUP_PROMPT = """\
+You are reviewing a list of family calendar events extracted from emails.
+Some may be duplicates — the same event extracted from multiple emails, or the same
+event mentioned in different school communications.
+
+Two events are duplicates if they describe the same real-world event with:
+- Similar title (same activity or event name)
+- Same or very close date (within 3 days)
+- Same or related source
+
+For each group of duplicates, keep the BEST version:
+1. Prefer undismissed over dismissed
+2. Then highest priority
+3. Then most complete notes and most specific title
+Remove the rest.
+
+Events:
+{events_json}
+
+Return ONLY a valid JSON object: {{"remove": ["id1", "id2", ...]}}
+If there are no duplicates, return {{"remove": []}}
+No explanation. No markdown.\
+"""
+
+
+def dedup_events(events: list[dict]) -> list[dict]:
+    """Run a second Claude pass to remove duplicate events from the merged list.
+
+    Manually added events are excluded and always kept. If the pass fails for
+    any reason, returns the original list unchanged.
+    """
+    immune = [e for e in events if e.get("manually_added")]
+    candidates = [e for e in events if not e.get("manually_added")]
+
+    if len(candidates) < 2:
+        log.info("Dedup pass skipped — fewer than 2 non-manual events")
+        return events
+
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    events_json = json.dumps(candidates, indent=2, ensure_ascii=False)
+    prompt = _DEDUP_PROMPT.format(events_json=events_json)
+
+    log.info("Running Claude dedup pass on %d event(s)...", len(candidates))
+    try:
+        message = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = message.content[0].text
+        result = _parse_claude_json(raw)
+
+        valid_ids = {e["id"] for e in candidates}
+        ids_to_remove = set(result.get("remove", [])) & valid_ids
+
+        if not ids_to_remove:
+            log.info("Dedup pass: no duplicates found")
+            return events
+
+        if len(ids_to_remove) >= len(candidates):
+            log.warning(
+                "Dedup pass wants to remove all %d candidates — skipping (safety check)",
+                len(candidates),
+            )
+            return events
+
+        kept = [e for e in candidates if e["id"] not in ids_to_remove]
+        log.info("Dedup pass: removed %d duplicate(s)", len(candidates) - len(kept))
+        return kept + immune
+
+    except Exception as exc:
+        log.warning("Dedup pass failed (%s) — keeping original event list", exc)
+        return events
+
+
+# ---------------------------------------------------------------------------
 # Saturday digest email
 # ---------------------------------------------------------------------------
 
@@ -516,12 +612,23 @@ def _test_auth():
 
 
 def _test_fetch():
-    """Smoke-test: authenticate, fetch emails, and print subjects."""
+    """Smoke-test: authenticate, fetch emails using lastScanned, and print subjects."""
     log.info("=== Fetch test starting ===")
     service = get_gmail_service()
-    emails = fetch_emails(service)
+    data = read_jsonbin()
+    last_scanned_str = data.get("lastScanned")
+    last_scanned: datetime | None = None
+    if last_scanned_str:
+        try:
+            last_scanned = datetime.fromisoformat(last_scanned_str)
+            log.info("Using lastScanned cutoff: %s (with 1h overlap buffer)", last_scanned)
+        except ValueError:
+            log.warning("Could not parse lastScanned %r — using fallback window", last_scanned_str)
+    else:
+        log.info("No lastScanned found — using newer_than:%dd fallback", SCAN_DAYS_BACK)
+    emails = fetch_emails(service, last_scanned=last_scanned)
     if not emails:
-        log.info("No emails found in the last %d days from allowed forwarders.", SCAN_DAYS_BACK)
+        log.info("No emails found in the current fetch window.")
     else:
         log.info("--- %d email(s) retrieved ---", len(emails))
         for i, e in enumerate(emails, 1):
@@ -599,38 +706,51 @@ def main() -> None:
     # Step 2: authenticate
     service = get_gmail_service()
 
-    # Step 3: fetch emails
-    emails = fetch_emails(service)
+    # Step 3: read existing JSONBin data (needed for lastScanned cutoff)
+    existing = read_jsonbin()
+    last_scanned: datetime | None = None
+    last_scanned_str = existing.get("lastScanned")
+    if last_scanned_str:
+        try:
+            last_scanned = datetime.fromisoformat(last_scanned_str)
+        except ValueError:
+            log.warning(
+                "Could not parse lastScanned %r — falling back to %dd window",
+                last_scanned_str,
+                SCAN_DAYS_BACK,
+            )
 
-    # Step 4: no emails — update lastScanned and exit
+    # Step 4: fetch emails
+    emails = fetch_emails(service, last_scanned=last_scanned)
+
+    # Step 5: no emails — update lastScanned and exit
     if not emails:
         log.info("No emails found, exiting")
         if not dry_run:
-            existing = read_jsonbin()
             existing["lastScanned"] = datetime.now(timezone.utc).isoformat()
             write_jsonbin(existing)
         log.info("=== Scan complete ===")
         return
 
-    # Step 5: analyze with Claude
+    # Step 6: analyze with Claude
     analysis = analyze_emails(emails)
     new_events = analysis["events"]
     new_digest_groups = analysis["digestGroups"]
 
-    # Step 6: read existing JSONBin data
-    existing = read_jsonbin()
-
     # Step 7: merge
     merged = merge_data(existing, new_events, new_digest_groups)
 
-    # Step 8: write (or dry-run print)
+    # Step 8: dedup
+    merged["events"] = dedup_events(merged["events"])
+
+    # Step 9: write (or dry-run print)
     if dry_run:
         log.info("DRY RUN — would write the following to JSONBin:")
         print(json.dumps(merged, indent=2, ensure_ascii=False))
     else:
         write_jsonbin(merged)
 
-    # Step 9: digest email
+    # Step 10: digest email
     today_name = date.today().strftime("%A")
     if force_digest or today_name == DIGEST_DAY:
         send_digest_email(merged["events"], merged["digestGroups"], force=force_digest)
@@ -639,6 +759,28 @@ def main() -> None:
 
 
 _SCOUTS_KEYWORDS = {"scout", "scouts", "beaver", "beavers", "cub", "cubs"}
+
+
+def _reset_last_scanned():
+    """Clear lastScanned in JSONBin so the next run falls back to SCAN_DAYS_BACK."""
+    log.info("=== Resetting lastScanned ===")
+    data = read_jsonbin()
+    data["lastScanned"] = None
+    write_jsonbin(data)
+    log.info("lastScanned cleared — next run will use newer_than:%dd fallback", SCAN_DAYS_BACK)
+
+
+def _test_dedup():
+    """Smoke-test: read current events from JSONBin and run the dedup pass (read-only)."""
+    log.info("=== Dedup test starting ===")
+    data = read_jsonbin()
+    events = data.get("events", [])
+    log.info("Read %d event(s) from JSONBin", len(events))
+    deduped = dedup_events(events)
+    removed = len(events) - len(deduped)
+    log.info("Dedup pass complete — %d duplicate(s) removed, %d kept", removed, len(deduped))
+    print(json.dumps(deduped, indent=2, ensure_ascii=False))
+    log.info("=== Dedup test passed ===")
 
 
 def _migrate_categories() -> None:
@@ -683,6 +825,10 @@ if __name__ == "__main__":
         _test_analyze()
     elif "--test-jsonbin" in sys.argv:
         _test_jsonbin()
+    elif "--reset-last-scanned" in sys.argv:
+        _reset_last_scanned()
+    elif "--test-dedup" in sys.argv:
+        _test_dedup()
     elif "--migrate-categories" in sys.argv:
         _migrate_categories()
     else:
