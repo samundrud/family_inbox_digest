@@ -1,14 +1,15 @@
 import { useState } from 'react'
 
-const TODAY = new Date().toISOString().slice(0, 10)
+const TODAY = new Date().toLocaleDateString('en-CA')
 
-const CATEGORIES = ['school', 'daycare', 'soccer', 'martial arts', 'activities', 'other']
+const CATEGORIES = ['school', 'daycare', 'scouts', 'soccer', 'GFT', 'other']
 
 const EMPTY = { title: '', date: '', category: 'school', source: '', notes: '' }
 
 export default function AddEventForm({ onAdd, onClose }) {
   const [form, setForm] = useState(EMPTY)
   const [errors, setErrors] = useState({})
+  const [submitting, setSubmitting] = useState(false)
 
   function set(field, value) {
     setForm((f) => ({ ...f, [field]: value }))
@@ -17,26 +18,30 @@ export default function AddEventForm({ onAdd, onClose }) {
 
   function validate() {
     const e = {}
-    if (!form.title.trim())    e.title    = 'Title is required'
-    if (!form.date)            e.date     = 'Date is required'
-    if (!form.category)        e.category = 'Category is required'
+    if (!form.title.trim()) e.title    = 'Title is required'
+    if (!form.category)     e.category = 'Category is required'
     return e
   }
 
-  function handleSubmit(ev) {
+  async function handleSubmit(ev) {
     ev.preventDefault()
     const e = validate()
     if (Object.keys(e).length) { setErrors(e); return }
-    onAdd({
-      title:    form.title.trim(),
-      date:     form.date,
-      category: form.category,
-      source:   form.source.trim() || 'Manual',
-      notes:    form.notes.trim(),
-      priority: 'medium',
-      dismissed:      false,
-      manually_added: true,
-    })
+    setSubmitting(true)
+    try {
+      await onAdd({
+        title:    form.title.trim(),
+        date:     form.date || null,
+        category: form.category,
+        source:   form.source.trim() || 'Manual',
+        notes:    form.notes.trim(),
+        priority: 'medium',
+        dismissed:      false,
+        manually_added: true,
+      })
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -79,7 +84,7 @@ export default function AddEventForm({ onAdd, onClose }) {
             />
           </Field>
 
-          <Field label="Date *" error={errors.date}>
+          <Field label="Date" error={errors.date}>
             <input
               type="date"
               value={form.date}
@@ -118,8 +123,10 @@ export default function AddEventForm({ onAdd, onClose }) {
           </Field>
 
           <div style={{ display: 'flex', gap: 10, marginTop: 24 }}>
-            <button type="submit" style={accentBtnStyle}>Add Event</button>
-            <button type="button" onClick={onClose} style={ghostBtnStyle}>Cancel</button>
+            <button type="submit" disabled={submitting} style={{ ...accentBtnStyle, opacity: submitting ? 0.6 : 1, cursor: submitting ? 'not-allowed' : 'pointer' }}>
+              {submitting ? 'Adding…' : 'Add Event'}
+            </button>
+            <button type="button" onClick={onClose} disabled={submitting} style={ghostBtnStyle}>Cancel</button>
           </div>
         </form>
       </div>

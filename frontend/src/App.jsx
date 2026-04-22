@@ -9,14 +9,9 @@ import {
 import EventCard    from './components/EventCard.jsx'
 import AddEventForm from './components/AddEventForm.jsx'
 import DigestGroup  from './components/DigestGroup.jsx'
-import StatsBar     from './components/StatsBar.jsx'
 import FilterPills  from './components/FilterPills.jsx'
 
-const TODAY = new Date().toISOString().slice(0, 10)
-
-function daysUntil(dateStr) {
-  return Math.ceil((new Date(dateStr) - new Date(TODAY)) / 86400000)
-}
+const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 }
 
 // ---------------------------------------------------------------------------
 // Loading skeleton
@@ -65,22 +60,45 @@ export default function App() {
 
   // Derived values
   const visibleEvents = (data.events || [])
-    .filter((e) => e.dismissed !== true)
     .filter((e) => filter === 'all' || e.category === filter)
     .slice()
-    .sort((a, b) => (a.date || '').localeCompare(b.date || ''))
-
-  const upcomingEvents = visibleEvents.filter((e) => e.date && e.date >= TODAY)
-  const urgentCount    = upcomingEvents.filter((e) => daysUntil(e.date) <= 3).length
-  const thisWeekCount  = upcomingEvents.filter((e) => daysUntil(e.date) <= 7).length
+    .sort((a, b) => {
+      // Dismissed → bottom
+      if (a.dismissed && !b.dismissed) return 1
+      if (!a.dismissed && b.dismissed) return -1
+      // Dateless active events → top, sorted by priority within
+      const aDateless = !a.date
+      const bDateless = !b.date
+      if (aDateless && !bDateless) return -1
+      if (!aDateless && bDateless) return 1
+      if (aDateless && bDateless) {
+        return (PRIORITY_ORDER[a.priority] ?? 1) - (PRIORITY_ORDER[b.priority] ?? 1)
+      }
+      return a.date.localeCompare(b.date)
+    })
 
   const visibleDigest = (data.digestGroups || []).filter(
     (g) => filter === 'all' || g.category === filter
   )
 
   // Handlers
-  async function handleDismiss(id)         { try { setData(await dismissEvent(id))          } catch (e) { setError(e.message) } }
-  async function handleDelete(id)          { try { setData(await deleteEvent(id))            } catch (e) { setError(e.message) } }
+  async function handleDismiss(id) {
+    setData((prev) => ({ ...prev, events: prev.events.map((e) => e.id === id ? { ...e, dismissed: true } : e) }))
+    try { await dismissEvent(id) } catch (e) {
+      setData((prev) => ({ ...prev, events: prev.events.map((ev) => ev.id === id ? { ...ev, dismissed: false } : ev) }))
+      setError(e.message)
+    }
+  }
+
+  async function handleDelete(id) {
+    const removed = (data.events || []).find((e) => e.id === id)
+    setData((prev) => ({ ...prev, events: prev.events.filter((e) => e.id !== id) }))
+    try { await deleteEvent(id) } catch (e) {
+      setData((prev) => ({ ...prev, events: removed ? [...prev.events, removed] : prev.events }))
+      setError(e.message)
+    }
+  }
+
   async function handleAdd(obj)            { try { setData(await addEvent(obj)); setShowAddForm(false) } catch (e) { setError(e.message) } }
   async function handleUpdate(id, fields)  { try { setData(await updateEvent(id, fields)); setEditingEventId(null) } catch (e) { setError(e.message) } }
 
@@ -92,7 +110,7 @@ export default function App() {
   if (loading) {
     return (
       <>
-        <AppHeader lastScannedLabel="—" urgentCount={0} onAddClick={() => {}} />
+        <AppHeader lastScannedLabel="—" onAddClick={() => {}} />
         <LoadingSkeleton />
       </>
     )
@@ -102,7 +120,7 @@ export default function App() {
   if (error) {
     return (
       <>
-        <AppHeader lastScannedLabel="—" urgentCount={0} onAddClick={() => {}} />
+        <AppHeader lastScannedLabel="—" onAddClick={() => {}} />
         <div style={{ maxWidth: 820, margin: '22px auto', padding: '0 16px' }}>
           <div style={{ background: '#2d1212', border: '1px solid var(--red)', borderRadius: 12, padding: '18px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
             <span style={{ color: 'var(--red)', fontSize: 14 }}><strong>Error:</strong> {error}</span>
@@ -122,17 +140,10 @@ export default function App() {
     <>
       <AppHeader
         lastScannedLabel={lastScannedLabel}
-        urgentCount={urgentCount}
         onAddClick={() => setShowAddForm(true)}
       />
 
       <div className="fadein" style={{ maxWidth: 820, margin: '0 auto', padding: '22px 16px' }}>
-
-        <StatsBar
-          upcomingCount={upcomingEvents.length}
-          urgentCount={urgentCount}
-          thisWeekCount={thisWeekCount}
-        />
 
         {/* Tab bar */}
         <div style={{ display: 'flex', gap: 4, marginBottom: 16, background: 'var(--surface)', borderRadius: 10, padding: 4 }}>
@@ -199,7 +210,7 @@ export default function App() {
 // Sub-components
 // ---------------------------------------------------------------------------
 
-function AppHeader({ lastScannedLabel, urgentCount, onAddClick }) {
+function AppHeader({ lastScannedLabel, onAddClick }) {
   return (
     <header style={{
       position: 'sticky', top: 0, zIndex: 100,
@@ -223,28 +234,17 @@ function AppHeader({ lastScannedLabel, urgentCount, onAddClick }) {
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        {urgentCount > 0 && (
-          <span style={{
-            background: 'var(--red)', color: '#000',
-            borderRadius: 99, padding: '3px 10px',
-            fontSize: 12, fontWeight: 700,
-          }}>
-            {urgentCount} urgent
-          </span>
-        )}
-        <button
-          onClick={onAddClick}
-          style={{
-            background: 'var(--accent)', color: '#000',
-            border: 'none', borderRadius: 8,
-            padding: '8px 16px', fontWeight: 700,
-            cursor: 'pointer', fontSize: 14, minHeight: 44,
-          }}
-        >
-          + Add Event
-        </button>
-      </div>
+      <button
+        onClick={onAddClick}
+        style={{
+          background: 'var(--accent)', color: '#000',
+          border: 'none', borderRadius: 8,
+          padding: '8px 16px', fontWeight: 700,
+          cursor: 'pointer', fontSize: 14, minHeight: 44,
+        }}
+      >
+        + Add Event
+      </button>
     </header>
   )
 }

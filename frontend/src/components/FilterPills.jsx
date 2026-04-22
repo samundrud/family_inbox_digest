@@ -1,4 +1,4 @@
-const FILTERS = ['all', 'school', 'daycare', 'soccer', 'martial arts', 'activities']
+const FILTERS = ['all', 'school', 'daycare', 'scouts', 'soccer', 'GFT', 'other']
 
 export default function FilterPills({ active, onChange }) {
   return (

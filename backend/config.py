@@ -56,7 +56,7 @@ CATEGORIES: dict[str, dict[str, str]] = {
         "icon": "⚽",
         "bg": "#2e1e00",
     },
-    "martial arts": {
+    "GFT": {
         "color": "#c084fc",
         "dot": "#c084fc",
         "icon": "🥋",

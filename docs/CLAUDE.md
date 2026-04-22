@@ -84,7 +84,7 @@ flowchart TD
 | `frontend/src/components/AddEventForm.jsx` | Modal / bottom-sheet form for manually adding events |
 | `frontend/src/components/DigestGroup.jsx` | Collapsible card showing weekly narrative bullets per sender |
 | `frontend/src/components/StatsBar.jsx` | Three stat cards: Upcoming / Urgent ≤3d / This Week |
-| `frontend/src/components/FilterPills.jsx` | Category filter buttons (all / school / daycare / soccer / martial arts / activities) |
+| `frontend/src/components/FilterPills.jsx` | Category filter buttons (all / school / daycare / soccer / GFT / activities) |
 
 ---
 
@@ -148,7 +148,7 @@ Defined in `config.py`. The same keys are used in both backend (email body) and 
 | `daycare` | 🌻 | `#4ade80` |
 | `scouts` | 🎯 | `#f87171` |
 | `soccer` | ⚽ | `#f0c040` |
-| `martial arts` | 🥋 | `#c084fc` |
+| `GFT` | 🥋 | `#c084fc` |
 | `other` | 📬 | `#9090a8` |
 
 ---

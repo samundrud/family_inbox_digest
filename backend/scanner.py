@@ -229,7 +229,7 @@ Return ONLY a valid JSON object with exactly two keys:
     Infer year from context (current year unless clearly next year).
     If the actionable date differs from the event start date, set date to the actionable date and include the actual event date in notes.
     If no date can be determined at all, set date to null.
-  - category: one of: school, daycare, scouts, soccer, martial arts, other
+  - category: one of: school, daycare, scouts, soccer, GFT, other
     Use "scouts" for Scouts Canada, Beavers, Cubs, or any scouting organisation.
     For emails sent directly by a parent, use "other" unless the event clearly fits another category.
   - priority: "high" if within 7 days OR requires immediate action (sign something, pay something, register for something). "medium" if within 30 days. "low" otherwise.
@@ -244,7 +244,7 @@ Omit: purely informational content with no action required and no specific date 
 
 "digestGroups": Weekly narrative summary. Include one entry per school, daycare, or activity provider. Do NOT include entries for emails sent directly by a parent — those only appear in events. For each entry:
   - source: sender organization name
-  - category: one of: school, daycare, scouts, soccer, martial arts, other
+  - category: one of: school, daycare, scouts, soccer, GFT, other
   - week_of: ISO date of Monday of the current week (YYYY-MM-DD)
   - bullets: array of 3-5 strings. Each is a specific, useful update — what kids are learning, classroom news, coach updates, schedule changes, reminders, event recaps. Write as a parent would want to read. Be specific. BAD: "The teacher sent an update." GOOD: "Ms. Chen's class finished their weather unit and began ecosystems — ask your child about the terrarium they built."
 
@@ -370,7 +370,7 @@ def merge_data(existing: dict, new_events: list[dict], new_digest_groups: list[d
     - DigestGroups: replace entirely with new Claude results.
     - lastScanned: always updated to current UTC timestamp.
     """
-    cutoff = date.today() - timedelta(days=7)
+    cutoff = date.today() - timedelta(days=2)
 
     # Keep all existing events, expiring only old auto-generated ones.
     kept_events: list[dict] = []
@@ -390,7 +390,7 @@ def merge_data(existing: dict, new_events: list[dict], new_digest_groups: list[d
         kept_events.append(e)
 
     if expired:
-        log.info("Auto-expired %d event(s) more than 7 days past their date", expired)
+        log.info("Auto-expired %d event(s) more than 2 days past their date", expired)
 
     existing_ids = {e["id"] for e in kept_events}
     added_events: list[dict] = [e for e in new_events if e["id"] not in existing_ids]
@@ -638,6 +638,42 @@ def main() -> None:
     log.info("=== Scan complete ===")
 
 
+_SCOUTS_KEYWORDS = {"scout", "scouts", "beaver", "beavers", "cub", "cubs"}
+
+
+def _migrate_categories() -> None:
+    """One-time migration: rename legacy categories in JSONBin.
+
+    martial arts → GFT
+    activities   → scouts  (if source mentions scouts/beavers/cubs)
+    activities   → other   (everything else)
+    """
+    log.info("=== Category migration starting ===")
+    data = read_jsonbin()
+    events = data.get("events", [])
+    changed = 0
+
+    for event in events:
+        cat = event.get("category", "")
+        if cat == "martial arts":
+            event["category"] = "GFT"
+            changed += 1
+            log.info("  %s → GFT  (%s)", event.get("title", "?"), event.get("source", ""))
+        elif cat == "activities":
+            source_words = set(re.split(r"\W+", event.get("source", "").lower()))
+            new_cat = "scouts" if source_words & _SCOUTS_KEYWORDS else "other"
+            event["category"] = new_cat
+            changed += 1
+            log.info("  %s → %s  (%s)", event.get("title", "?"), new_cat, event.get("source", ""))
+
+    if changed:
+        write_jsonbin(data)
+        log.info("Migration complete — updated %d event(s)", changed)
+    else:
+        log.info("Migration complete — nothing to update")
+    log.info("=== Category migration done ===")
+
+
 if __name__ == "__main__":
     if "--test-auth" in sys.argv:
         _test_auth()
@@ -647,5 +683,7 @@ if __name__ == "__main__":
         _test_analyze()
     elif "--test-jsonbin" in sys.argv:
         _test_jsonbin()
+    elif "--migrate-categories" in sys.argv:
+        _migrate_categories()
     else:
         main()

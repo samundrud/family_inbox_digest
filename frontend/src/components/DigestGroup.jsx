@@ -5,8 +5,7 @@ const CATEGORY_META = {
   daycare:        { color: '#4ade80', icon: '🌻' },
   scouts:         { color: '#f87171', icon: '🎯' },
   soccer:         { color: '#f0c040', icon: '⚽' },
-  'martial arts': { color: '#c084fc', icon: '🥋' },
-  activities:     { color: '#fb923c', icon: '🎒' },
+  'GFT':          { color: '#c084fc', icon: '🥋' },
   other:          { color: '#9090a8', icon: '📬' },
 }
 
