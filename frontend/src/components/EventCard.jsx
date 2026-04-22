@@ -136,10 +136,32 @@ export default function EventCard({ event, onDismiss, onDelete, onEdit, isEditin
           <span style={{ fontSize: 11, fontWeight: 600, color: tagColor, background: tagColor + '22', borderRadius: 4, padding: '2px 7px' }}>
             {event.category}
           </span>
-          <span style={{ fontSize: 12, color: '#55556a' }}>via {event.source}</span>
+          {event.source_message_id ? (
+            <a
+              href={`https://mail.google.com/mail/u/0/#all/${event.source_message_id}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={event.source_subject || 'View source email'}
+              style={{ fontSize: 12, color: '#55556a', textDecoration: 'none' }}
+            >
+              via {event.source} ↗
+            </a>
+          ) : (
+            <span style={{ fontSize: 12, color: '#55556a' }}>via {event.source}</span>
+          )}
         </div>
         {event.notes && (
           <p style={{ fontSize: 13, color: '#9090a8', margin: '6px 0 0', lineHeight: 1.5 }}>{event.notes}</p>
+        )}
+        {event.link && (
+          <a
+            href={event.link}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ display: 'inline-block', marginTop: 8, fontSize: 12, fontWeight: 700, color: 'var(--accent)', textDecoration: 'none' }}
+          >
+            Register →
+          </a>
         )}
       </div>
 

@@ -10,7 +10,7 @@ Family Inbox Intelligence is a private family dashboard. A dedicated Gmail accou
 - **Events:** upcoming dates, deadlines, and action items
 - **Digest groups:** a weekly narrative summary grouped by sender
 
-Results are stored in JSONBin.io. A React SPA reads JSONBin and displays everything. Both parents can view, add, edit, and dismiss events from their phones. Every Saturday a digest email is sent to both parents via Gmail SMTP.
+Results are stored in JSONBin.io. A React SPA reads JSONBin and displays everything. Both parents can view, add, edit, and dismiss events from their phones. Every Saturday a digest email is sent to both parents via Gmail SMTP. A day-before reminder fires on any day an event is coming up the next day.
 
 **Email sources:** All emails in the dedicated Gmail inbox are scanned. Family context configured via `FAMILY_CONTEXT` in `backend/.env`.
 
@@ -21,22 +21,20 @@ Results are stored in JSONBin.io. A React SPA reads JSONBin and displays everyth
 ```mermaid
 flowchart TD
     Start([Scanner starts]) --> Auth["Authenticate Gmail\n(token.json · OAuth2)"]
-    Auth --> Fetch["Fetch emails since lastScanned\n(fallback: newer_than:7d)"]
-    Fetch --> Empty{0 emails?}
-    Empty -->|yes| UpdateTS["Update lastScanned\nin JSONBin"]
-    UpdateTS --> Done1([Done])
-    Empty -->|no| Claude["Send emails to Claude API\n(claude-sonnet-4-6)"]
-    Claude --> Parse["Parse response →\nevents + digest groups"]
-    Parse --> Read["Read existing data\nfrom JSONBin"]
-    Read --> Merge["Merge events:\n① Keep all existing\n② Add new by ID\n③ Auto-expire >7 days old\n④ Never remove manually_added"]
-    Merge --> Saturday{"Saturday or\n--send-digest?"}
-    Saturday -->|yes| FullDigest["Regenerate digest groups\nfrom full 7-day window"]
-    Saturday -->|no| IncrDigest["Append new bullets\nto existing digest groups"]
-    FullDigest --> Write["Write merged data\nto JSONBin"]
-    IncrDigest --> Write
-    Write --> SendEmail{"Send digest\nemail?"}
-    SendEmail -->|yes| Email["Gmail SMTP\n→ both parents"]
-    SendEmail -->|no| Done2([Done])
+    Auth --> ReadBin["Read JSONBin\n(get lastScanned + existing data)"]
+    ReadBin --> Fetch["Fetch emails since lastScanned\n(1h overlap buffer · fallback: newer_than:7d)"]
+    Fetch --> Empty{0 new emails?}
+    Empty -->|yes| UpdateTS["Update lastScanned in JSONBin"]
+    UpdateTS --> Reminder1["Send day-before reminder email\n(if events tomorrow)"]
+    Reminder1 --> Done1([Done])
+    Empty -->|no| Claude1["Claude pass 1: analyze emails\n(extract events + digest groups)"]
+    Claude1 --> Merge["Merge into existing:\n① Add new events by ID\n② Auto-expire >2 days past date\n③ Never remove manually_added"]
+    Merge --> Dedup["Claude pass 2: dedup\n(remove duplicate events)"]
+    Dedup --> Write["Write merged data to JSONBin\n(30s timeout · 3 retries)"]
+    Write --> Reminder2["Send day-before reminder email\n(if events tomorrow)"]
+    Reminder2 --> Saturday{"Saturday or\n--send-digest?"}
+    Saturday -->|yes| Email["Gmail SMTP → digest email to parents"]
+    Saturday -->|no| Done2([Done])
     Email --> Done2
 ```
 
@@ -64,7 +62,7 @@ flowchart TD
 
 | File | Purpose |
 |---|---|
-| `backend/scanner.py` | Main entrypoint. Orchestrates all steps: auth → fetch → analyze → merge → write → email |
+| `backend/scanner.py` | Main entrypoint. Orchestrates all steps: auth → fetch → analyze → merge → dedup → write → email |
 | `backend/config.py` | All user-configurable settings and category metadata. Loaded from `backend/.env`. |
 | `backend/credentials.json` | Gmail OAuth2 app credentials (do not commit, do not modify) |
 | `backend/token.json` | Gmail OAuth2 user token (generated on first `--test-auth` run, do not commit) |
@@ -78,13 +76,12 @@ flowchart TD
 | File | Purpose |
 |---|---|
 | `frontend/src/api.js` | All JSONBin read/write — `loadData`, `saveData`, `dismissEvent`, `deleteEvent`, `addEvent`, `updateEvent` |
-| `frontend/src/App.jsx` | Root component. All state, all handlers, top-level layout. |
+| `frontend/src/App.jsx` | Root component. All state, all handlers, PIN gate logic, top-level layout. |
 | `frontend/src/index.css` | Design system: CSS variables, typography, layout, animations, skeleton loader |
-| `frontend/src/components/EventCard.jsx` | Single event card with display + inline edit mode |
-| `frontend/src/components/AddEventForm.jsx` | Modal / bottom-sheet form for manually adding events |
+| `frontend/src/components/EventCard.jsx` | Single event card: display, inline edit, Gmail source link, registration link |
+| `frontend/src/components/AddEventForm.jsx` | Modal bottom-sheet form for manually adding events |
 | `frontend/src/components/DigestGroup.jsx` | Collapsible card showing weekly narrative bullets per sender |
-| `frontend/src/components/StatsBar.jsx` | Three stat cards: Upcoming / Urgent ≤3d / This Week |
-| `frontend/src/components/FilterPills.jsx` | Category filter buttons (all / school / daycare / soccer / GFT / activities) |
+| `frontend/src/components/FilterPills.jsx` | Category filter buttons (all / school / daycare / scouts / soccer / GFT / other) |
 
 ---
 
@@ -96,12 +93,15 @@ flowchart TD
   "events": [
     {
       "id": "evt_001",
-      "title": "Picture Day",
-      "date": "2026-04-25",
+      "title": "Summer Camp — Register by May 25",
+      "date": "2026-05-25",
       "category": "school",
-      "priority": "high",
+      "priority": "medium",
       "source": "Springfield Elementary",
-      "notes": "Wear class colour — blue for Grade 3",
+      "notes": "Camp runs June 26–July 2. Register by May 25 for the early-bird rate.",
+      "link": "https://example.com/register",
+      "source_message_id": "18f2b3c4d5e6f7a8",
+      "source_subject": "Summer Camp Registration Now Open",
       "dismissed": false,
       "manually_added": false
     }
@@ -117,8 +117,14 @@ flowchart TD
 }
 ```
 
+**Event fields:**
+- `link` — registration/sign-up/payment URL if present in the source email; `null` otherwise. Never set for informational or newsletter links.
+- `source_message_id` — Gmail API message ID of the source email; used to build a Gmail deep link on the EventCard.
+- `source_subject` — subject line of the source email; shown as a tooltip on the Gmail link.
+- Both `link` and `source_*` fields are absent on manually-added events and on events extracted before these fields were introduced.
+
 **Merge rules (applied on every scanner run):**
-- Events: keep all existing where `dismissed=true` OR `manually_added=true`. Add new Claude events only if their `id` doesn't already exist.
+- Events: keep all existing; add new Claude events only if their `id` doesn't already exist; auto-expire events more than 2 days past their date unless `manually_added`.
 - DigestGroups: always replace entirely with new Claude output.
 - `lastScanned`: always update to current UTC timestamp.
 
@@ -127,13 +133,18 @@ flowchart TD
 ## Scanner CLI flags
 
 ```bash
-python scanner.py                # Normal run
-python scanner.py --dry-run      # All steps, no writes, prints JSON to console
-python scanner.py --send-digest  # Force send Saturday digest email regardless of day
-python scanner.py --test-auth    # Test Gmail OAuth only
-python scanner.py --test-fetch   # Test email fetching only
-python scanner.py --test-analyze # Test Claude analysis only (uses cached fetch)
-python scanner.py --test-jsonbin # Test JSONBin read/write only
+python scanner.py                    # Normal run
+python scanner.py --dry-run          # All steps, no writes, prints final JSON to console
+python scanner.py --send-digest      # Force send Saturday digest email regardless of day
+python scanner.py --send-reminder    # Force send day-before reminder email regardless of schedule
+python scanner.py --test-auth        # Test Gmail OAuth only
+python scanner.py --test-fetch       # Test email fetching only (prints subjects)
+python scanner.py --test-analyze     # Test Claude analysis only (prints raw JSON)
+python scanner.py --test-jsonbin     # Test JSONBin read/write only
+python scanner.py --test-dedup       # Test dedup pass on current JSONBin events (read-only)
+python scanner.py --test-reminder    # Preview tomorrow's reminder events (read-only, no send)
+python scanner.py --reset-last-scanned   # Clear lastScanned so next run fetches 7 days back
+python scanner.py --migrate-categories  # One-time: rename legacy category values in JSONBin
 ```
 
 ---
@@ -150,6 +161,12 @@ Defined in `config.py`. The same keys are used in both backend (email body) and 
 | `soccer` | ⚽ | `#f0c040` |
 | `GFT` | 🥋 | `#c084fc` |
 | `other` | 📬 | `#9090a8` |
+
+---
+
+## PIN gate
+
+All write actions on the dashboard (add event, dismiss, delete, edit) require a PIN set via `VITE_APP_PIN` in `frontend/.env`. The PIN is checked on every page load — it is stored in React state only, not in sessionStorage or localStorage, so refreshing or opening a new tab always requires re-entry.
 
 ---
 
@@ -198,6 +215,7 @@ Mobile-first. All interactive elements min 44px touch target height.
 |---|---|
 | `VITE_JSONBIN_BIN_ID` | Same bin ID as backend |
 | `VITE_JSONBIN_API_KEY` | Same key as backend — escape every `$` as `\$` (Vite runs dotenv-expand) |
+| `VITE_APP_PIN` | PIN required to make any write action on the dashboard |
 
 All actual values live in the `.env` files (gitignored). See `docs/SERVICES.md` for account details and infrastructure IDs.
 
@@ -221,4 +239,5 @@ Key paths on the local machine:
 - Backend errors are logged with `logging` and raised explicitly — no silent failures.
 - Frontend errors are caught by `api.js` functions and thrown as descriptive strings for the UI to display.
 - The frontend reads/writes JSONBin directly from the browser — there is no backend API server.
+- JSONBin requests use a 30s timeout with 3 automatic retries (3s delay between attempts).
 - `firebase deploy --only hosting` is the only deploy step. No CI/CD pipeline.

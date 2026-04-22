@@ -8,6 +8,7 @@ import logging
 import re
 import smtplib
 import sys
+import time
 from datetime import date, datetime, timedelta, timezone
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -99,8 +100,25 @@ def _decode_body(data: str) -> str:
 
 
 def _strip_html(raw: str) -> str:
-    """Remove HTML tags and decode entities, returning plain text."""
-    text = re.sub(r"<[^>]+>", " ", raw)
+    """Remove HTML tags and decode entities, returning plain text.
+
+    Anchor hrefs are preserved inline as 'text (url)' so Claude can see links.
+    """
+    # Preserve anchor hrefs: <a href="URL">text</a> → text (URL)
+    def _expand_anchor(m: re.Match) -> str:
+        href = m.group(1).strip()
+        text = re.sub(r"<[^>]+>", " ", m.group(2)).strip()
+        if href and not href.startswith(("mailto:", "javascript:")):
+            return f"{text} ({href})" if text else href
+        return text
+
+    text = re.sub(
+        r'<a[^>]+href=["\']([^"\']*)["\'][^>]*>(.*?)</a>',
+        _expand_anchor,
+        raw,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    text = re.sub(r"<[^>]+>", " ", text)
     text = html.unescape(text)
     return re.sub(r"\s+", " ", text).strip()
 
@@ -252,7 +270,9 @@ Return ONLY a valid JSON object with exactly two keys:
   - priority: "high" if within 7 days OR requires immediate action (sign something, pay something, register for something). "medium" if within 30 days. "low" otherwise.
   - source: for forwarded school/activity emails, use the sender organisation name only e.g. "Springfield Elementary".
     For emails sent directly by a parent, use the sender's first name e.g. "Sarah", or "Family" if the name is unclear.
+  - source_email_index: the 1-based index of the email this event was extracted from, matching the "--- Email N ---" labels above
   - notes: one sentence of actionable context for the parent e.g. "Wear class colour — blue for Grade 3". If the actionable date differs from the actual event date, always include the event date here e.g. "Camp runs June 26–July 2 in Burnaby. Register by May 25 for the early-bird rate."
+  - link: URL of a registration, sign-up, or payment page if one is present in the email — e.g. a link labelled "Register here", "Sign up", "Book now", or "Pay online". Set to null if no such link exists. Never include general school website links, newsletter links, unsubscribe links, or tracking URLs.
   - dismissed: false
   - manually_added: false
 
@@ -326,6 +346,17 @@ def analyze_emails(emails: list[dict]) -> dict:
 
     events = result.get("events", [])
     digest_groups = result.get("digestGroups", [])
+
+    for event in events:
+        idx = event.pop("source_email_index", None)
+        if idx is not None:
+            try:
+                src = emails[int(idx) - 1]
+                event["source_message_id"] = src["message_id"]
+                event["source_subject"] = src["subject"]
+            except (IndexError, ValueError, TypeError):
+                pass
+
     log.info(
         "Claude returned %d event(s) and %d digest group(s)",
         len(events),
@@ -344,14 +375,36 @@ _JSONBIN_HEADERS_WRITE = {
     "Content-Type": "application/json",
     "X-Master-Key": JSONBIN_API_KEY,
 }
+_JSONBIN_TIMEOUT = 30
+_JSONBIN_RETRIES = 3
+_JSONBIN_RETRY_DELAY = 3  # seconds between attempts
 
 _EMPTY_BIN: dict = {"events": [], "digestGroups": [], "lastScanned": None}
+
+
+def _jsonbin_request(method: str, url: str, **kwargs) -> requests.Response:
+    """Call requests with retries on timeout or connection error."""
+    kwargs.setdefault("timeout", _JSONBIN_TIMEOUT)
+    last_exc: Exception | None = None
+    for attempt in range(1, _JSONBIN_RETRIES + 1):
+        try:
+            resp = requests.request(method, url, **kwargs)
+            return resp
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+            last_exc = exc
+            if attempt < _JSONBIN_RETRIES:
+                log.warning(
+                    "JSONBin %s timed out (attempt %d/%d) — retrying in %ds...",
+                    method.upper(), attempt, _JSONBIN_RETRIES, _JSONBIN_RETRY_DELAY,
+                )
+                time.sleep(_JSONBIN_RETRY_DELAY)
+    raise last_exc
 
 
 def read_jsonbin() -> dict:
     """Fetch current data from JSONBin. Returns the stored record dict."""
     url = f"{_JSONBIN_BASE}/{JSONBIN_BIN_ID}/latest"
-    resp = requests.get(url, headers=_JSONBIN_HEADERS_READ, timeout=15)
+    resp = _jsonbin_request("get", url, headers=_JSONBIN_HEADERS_READ)
     if resp.status_code == 200:
         record = resp.json().get("record", _EMPTY_BIN)
         event_count = len(record.get("events", []))
@@ -367,11 +420,10 @@ def read_jsonbin() -> dict:
 def write_jsonbin(data: dict) -> None:
     """Write the full data dict to JSONBin."""
     url = f"{_JSONBIN_BASE}/{JSONBIN_BIN_ID}"
-    resp = requests.put(
-        url,
+    resp = _jsonbin_request(
+        "put", url,
         headers=_JSONBIN_HEADERS_WRITE,
         data=json.dumps(data),
-        timeout=15,
     )
     resp.raise_for_status()
     event_count = len(data.get("events", []))

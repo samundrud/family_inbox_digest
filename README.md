@@ -1,6 +1,6 @@
 # Family Inbox Intelligence
 
-A private family dashboard that reads a dedicated Gmail inbox where school and activity emails are forwarded. A Python scanner reads those emails, sends them to Claude, and extracts upcoming events and a weekly narrative digest. Results are stored in JSONBin and displayed in a React dashboard. Every Saturday morning a digest email is sent to both parents.
+A private family dashboard that reads a dedicated Gmail inbox where school and activity emails are forwarded. A Python scanner reads those emails, sends them to Claude, and extracts upcoming events and a weekly narrative digest. Results are stored in JSONBin and displayed in a React dashboard. Every Saturday morning a digest email is sent to both parents; a day-before reminder fires whenever an event is coming up the next day.
 
 **Users:** Two parents and their children.
 **Email sources:** All emails in the dedicated Gmail inbox are scanned. Family context configured via `FAMILY_CONTEXT` in `backend/.env`.
@@ -13,19 +13,22 @@ A private family dashboard that reads a dedicated Gmail inbox where school and a
 flowchart LR
     Gmail["📧 Gmail inbox\n(family forwarding account)"]
     Scanner["🖥️ scanner.py\n(Mac · launchd · 7am daily)"]
-    Claude["🤖 Claude Sonnet\n(Anthropic API)"]
+    Claude["🤖 Claude Sonnet\n(Anthropic API · 2 passes)"]
     JSONBin["🗄️ JSONBin.io\n(data store)"]
-    Frontend["📱 React SPA\n(Firebase Hosting)"]
+    Frontend["📱 React SPA\n(Firebase Hosting · PIN-gated)"]
+    ReminderEmail["📅 Reminder email\n(day before events)"]
     DigestEmail["📋 Digest email\n(Saturday)"]
     Parents["👨‍👩‍👧‍👦 Parents"]
 
     Gmail -->|"Gmail API · OAuth2"| Scanner
-    Scanner -->|"emails"| Claude
+    Scanner -->|"analyze + dedup"| Claude
     Claude -->|"events + digest groups"| Scanner
-    Scanner -->|"PUT"| JSONBin
+    Scanner -->|"PUT · 30s timeout · 3 retries"| JSONBin
     JSONBin -->|"GET · browser"| Frontend
-    Frontend <-->|"view · add · edit · dismiss"| Parents
+    Frontend <-->|"view · add · edit · dismiss\n(PIN-gated writes)"| Parents
+    Scanner -->|"Gmail SMTP · daily"| ReminderEmail
     Scanner -->|"Gmail SMTP · Saturday"| DigestEmail
+    ReminderEmail --> Parents
     DigestEmail --> Parents
 ```
 
@@ -79,7 +82,7 @@ npm install
 
 # 2. Configure environment
 cp .env.example .env
-# Edit frontend/.env — set VITE_JSONBIN_BIN_ID and VITE_JSONBIN_API_KEY
+# Edit frontend/.env — set VITE_JSONBIN_BIN_ID, VITE_JSONBIN_API_KEY, and VITE_APP_PIN
 # NOTE: escape every $ in the API key with \$ (e.g. \$2a\$10\$...)
 
 # 3. Run dev server
@@ -94,7 +97,7 @@ npm run dev
 All commands run from the `backend/` directory with the virtualenv active.
 
 ```bash
-# Full run: fetch emails → Claude → write JSONBin → send digest if Saturday
+# Full run: fetch emails → Claude → write JSONBin → send reminder → send digest if Saturday
 python scanner.py
 
 # Dry run: all steps but no writes, prints JSON to console
@@ -103,11 +106,20 @@ python scanner.py --dry-run
 # Force send the weekly digest email right now
 python scanner.py --send-digest
 
+# Force send the day-before reminder email right now
+python scanner.py --send-reminder
+
 # Smoke tests (run each independently to verify a step)
 python scanner.py --test-auth
 python scanner.py --test-fetch
 python scanner.py --test-analyze
 python scanner.py --test-jsonbin
+python scanner.py --test-dedup
+python scanner.py --test-reminder
+
+# Maintenance
+python scanner.py --reset-last-scanned   # Clear lastScanned so next run fetches 7 days back
+python scanner.py --migrate-categories   # One-time: rename legacy category values in JSONBin
 ```
 
 ---
@@ -164,6 +176,7 @@ launchctl unload ~/Library/LaunchAgents/com.familyinbox.scanner.plist
 | `JSONBIN_BIN_ID` | JSONBin bin ID |
 | `JSONBIN_API_KEY` | JSONBin master key |
 | `DIGEST_RECIPIENTS` | Comma-separated list of digest email recipients |
+| `FAMILY_CONTEXT` | Free-text description of children's schools/providers passed to Claude |
 | `LINEAR_API_KEY` | Linear API key (only needed for `linear_setup.py`) |
 | `LINEAR_TEAM_ID` | Linear team key, e.g. `FAM` |
 
@@ -172,7 +185,8 @@ launchctl unload ~/Library/LaunchAgents/com.familyinbox.scanner.plist
 | Variable | Description |
 |---|---|
 | `VITE_JSONBIN_BIN_ID` | Same bin ID as backend |
-| `VITE_JSONBIN_API_KEY` | Same master key as backend — escape `$` as `\$` |
+| `VITE_JSONBIN_API_KEY` | Same master key as backend — escape `$` as `\$` (Vite runs dotenv-expand) |
+| `VITE_APP_PIN` | PIN required to make any write action on the dashboard |
 
 ---
 
@@ -198,7 +212,6 @@ family_inbox_digest/
 │   │       ├── EventCard.jsx
 │   │       ├── AddEventForm.jsx
 │   │       ├── DigestGroup.jsx
-│   │       ├── StatsBar.jsx
 │   │       └── FilterPills.jsx
 │   ├── .env
 │   └── .env.example
