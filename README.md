@@ -143,21 +143,24 @@ Refreshing any path does not 404 — SPA rewrites are configured in `firebase.js
 
 ## Scheduler (Mac launchd)
 
-The scanner runs automatically at 7am daily via a launchd plist.
+The scanner runs automatically on the first login of each day via a launchd plist (`RunAtLoad`). Subsequent logins the same day are skipped. A sentinel file (`~/Desktop/family-inbox/last-run-date`) tracks whether the scanner has already run today.
 
 **Plist location:** `~/Library/LaunchAgents/com.familyinbox.scanner.plist`
 **Log file:** `~/Desktop/family-inbox/scanner.log`
 
 ```bash
-# Load and start the scheduler
+# Reload after editing the plist
+launchctl unload ~/Library/LaunchAgents/com.familyinbox.scanner.plist
 launchctl load ~/Library/LaunchAgents/com.familyinbox.scanner.plist
-launchctl start com.familyinbox.scanner
 
 # Verify it is registered
 launchctl list | grep familyinbox
 
-# Unload (stops automatic runs)
-launchctl unload ~/Library/LaunchAgents/com.familyinbox.scanner.plist
+# Force an auto-style run right now (respects the sentinel — skips if already ran today)
+python scanner.py --auto
+
+# Delete today's sentinel to force a re-run on next login
+rm ~/Desktop/family-inbox/last-run-date
 ```
 
 **Required macOS permission:** System Settings → Privacy & Security → Full Disk Access → add `venv/bin/python3`. Without this the launchd job silently fails.
