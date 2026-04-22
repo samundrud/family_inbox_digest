@@ -935,11 +935,22 @@ def _test_jsonbin():
     log.info("=== JSONBin test passed ===")
 
 
+_SENTINEL_PATH = Path.home() / "Desktop" / "family-inbox" / "last-run-date"
+
+
 def main() -> None:
     args = set(sys.argv[1:])
     dry_run = "--dry-run" in args
     force_digest = "--send-digest" in args
     force_reminder = "--send-reminder" in args
+    auto_mode = "--auto" in args
+
+    # --auto: skip if already ran today (used by launchd RunAtLoad trigger)
+    if auto_mode:
+        today = date.today().isoformat()
+        if _SENTINEL_PATH.exists() and _SENTINEL_PATH.read_text().strip() == today:
+            log.info("Already ran today — skipping (--auto mode)")
+            return
 
     log.info("=== Family Inbox Scanner starting ===%s", " (DRY RUN)" if dry_run else "")
 
@@ -993,6 +1004,10 @@ def main() -> None:
             final_data.get("digestGroups", []),
             force=force_digest,
         )
+
+    if auto_mode and not dry_run:
+        _SENTINEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _SENTINEL_PATH.write_text(date.today().isoformat())
 
     log.info("=== Scan complete ===")
 
