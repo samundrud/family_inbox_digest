@@ -204,8 +204,11 @@ def fetch_emails(service) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 _SYSTEM_PROMPT = (
-    "You are analyzing emails forwarded to a dedicated family inbox. "
-    "All emails come from schools, daycares, and children's activity providers. "
+    "You are analyzing emails in a dedicated family inbox. "
+    "Most emails are forwarded from schools, daycares, and children's activity providers. "
+    "Some emails are sent directly by a parent as a personal reminder or family event "
+    "(e.g. a doctor appointment, a birthday party, a camp they found). "
+    "Extract events from all of these. "
     + FAMILY_CONTEXT
 )
 
@@ -218,21 +221,30 @@ Return ONLY a valid JSON object with exactly two keys:
 
 "events": Array of important upcoming dates, deadlines, or required actions. For each:
   - id: unique string e.g. "evt_001"
-  - title: concise name e.g. "Picture Day", "Belt Test — Yellow Belt", "Permission Slip Due"
-  - date: YYYY-MM-DD. Infer year from context (current year unless clearly next year). If no specific date exists, omit this event entirely.
-  - category: one of: school, daycare, soccer, martial arts, activities, other
+  - title: concise name. When the actionable date is a deadline rather than the event itself, reflect that in the title e.g. "Summer BJJ Camp — Register by May 25" rather than just "Summer BJJ Camp".
+  - date: YYYY-MM-DD, chosen by this priority order:
+      1. Registration or sign-up deadline — use this if the email is a reminder to register, pay, or sign up
+      2. Permission slip or payment due date — use this if the email requires returning something
+      3. Event start date — only use this if there is no prior action required (e.g. a school concert you just attend)
+    Infer year from context (current year unless clearly next year).
+    If the actionable date differs from the event start date, set date to the actionable date and include the actual event date in notes.
+    If no date can be determined at all, set date to null.
+  - category: one of: school, daycare, scouts, soccer, martial arts, other
+    Use "scouts" for Scouts Canada, Beavers, Cubs, or any scouting organisation.
+    For emails sent directly by a parent, use "other" unless the event clearly fits another category.
   - priority: "high" if within 7 days OR requires immediate action (sign something, pay something, register for something). "medium" if within 30 days. "low" otherwise.
-  - source: sender organization name only e.g. "Springfield Elementary"
-  - notes: one sentence of actionable context for the parent e.g. "Wear class colour — blue for Grade 3" or "Registration link expires Friday at midnight"
+  - source: for forwarded school/activity emails, use the sender organisation name only e.g. "Springfield Elementary".
+    For emails sent directly by a parent, use the sender's first name e.g. "Sarah", or "Family" if the name is unclear.
+  - notes: one sentence of actionable context for the parent e.g. "Wear class colour — blue for Grade 3". If the actionable date differs from the actual event date, always include the event date here e.g. "Camp runs June 26–July 2 in Burnaby. Register by May 25 for the early-bird rate."
   - dismissed: false
   - manually_added: false
 
-Include: picture day, field trips, permission slip deadlines, signup/registration deadlines, belt tests, tournaments, Pro-D day closures, concerts, curriculum nights, fundraiser deadlines, any date requiring a parent to do something.
-Omit: events with no specific date, purely informational content with no action required.
+Include: picture day, field trips, permission slip deadlines, signup/registration deadlines, belt tests, tournaments, Pro-D day closures, concerts, curriculum nights, fundraiser deadlines, any date requiring a parent to do something, personal reminders or family events sent directly by a parent, actionable items with no specific date (e.g. a form to return with no stated deadline) — include these with date: null.
+Omit: purely informational content with no action required and no specific date (e.g. general newsletters, weekly roundups with no deadlines or upcoming events).
 
-"digestGroups": Weekly narrative summary, one entry per sender. For each:
+"digestGroups": Weekly narrative summary. Include one entry per school, daycare, or activity provider. Do NOT include entries for emails sent directly by a parent — those only appear in events. For each entry:
   - source: sender organization name
-  - category: one of: school, daycare, soccer, martial arts, activities, other
+  - category: one of: school, daycare, scouts, soccer, martial arts, other
   - week_of: ISO date of Monday of the current week (YYYY-MM-DD)
   - bullets: array of 3-5 strings. Each is a specific, useful update — what kids are learning, classroom news, coach updates, schedule changes, reminders, event recaps. Write as a parent would want to read. Be specific. BAD: "The teacher sent an update." GOOD: "Ms. Chen's class finished their weather unit and began ecosystems — ask your child about the terrarium they built."
 
