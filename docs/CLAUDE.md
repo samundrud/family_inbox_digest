@@ -78,7 +78,7 @@ flowchart TD
 | `frontend/src/api.js` | All JSONBin read/write — `loadData`, `saveData`, `dismissEvent`, `deleteEvent`, `addEvent`, `updateEvent` |
 | `frontend/src/App.jsx` | Root component. All state, all handlers, PIN gate logic, top-level layout. |
 | `frontend/src/index.css` | Design system: CSS variables, typography, layout, animations, skeleton loader |
-| `frontend/src/components/EventCard.jsx` | Single event card: display, inline edit, Gmail source link, registration link |
+| `frontend/src/components/EventCard.jsx` | Single event card: display, inline edit, copy-subject button (⎘), "Open link →" action |
 | `frontend/src/components/AddEventForm.jsx` | Modal bottom-sheet form for manually adding events |
 | `frontend/src/components/DigestGroup.jsx` | Collapsible card showing weekly narrative bullets per sender |
 | `frontend/src/components/FilterPills.jsx` | Category filter buttons (all / school / daycare / scouts / soccer / GFT / other) |
@@ -101,6 +101,7 @@ flowchart TD
       "notes": "Camp runs June 26–July 2. Register by May 25 for the early-bird rate.",
       "link": "https://example.com/register",
       "source_message_id": "18f2b3c4d5e6f7a8",
+      "source_thread_id": "18f2b3c4d5e6f7a8",
       "source_subject": "Summer Camp Registration Now Open",
       "dismissed": false,
       "manually_added": false
@@ -118,10 +119,11 @@ flowchart TD
 ```
 
 **Event fields:**
-- `link` — registration/sign-up/payment URL if present in the source email; `null` otherwise. Never set for informational or newsletter links.
-- `source_message_id` — Gmail API message ID of the source email; used to build a Gmail deep link on the EventCard.
-- `source_subject` — subject line of the source email; shown as a tooltip on the Gmail link.
-- Both `link` and `source_*` fields are absent on manually-added events and on events extracted before these fields were introduced.
+- `link` — URL if present in the source email (registration, survey, booking, etc.); `null` otherwise. Never set for informational or newsletter links. Displayed as "Open link →" on the EventCard.
+- `source_message_id` — Gmail API message ID of the source email.
+- `source_thread_id` — Gmail API thread ID of the source email (more reliable than message ID for lookups).
+- `source_subject` — subject line of the source email. Shown as a tooltip on desktop; can be copied to clipboard via the ⎘ button on the EventCard to search Gmail manually.
+- `link` and `source_*` fields are absent on manually-added events and on events extracted before these fields were introduced.
 
 **Merge rules (applied on every scanner run):**
 - Events: keep all existing; add new Claude events only if their `id` doesn't already exist; auto-expire events more than 2 days past their date unless `manually_added`.
@@ -144,6 +146,7 @@ python scanner.py --test-jsonbin     # Test JSONBin read/write only
 python scanner.py --test-dedup       # Test dedup pass on current JSONBin events (read-only)
 python scanner.py --test-reminder    # Preview tomorrow's reminder events (read-only, no send)
 python scanner.py --reset-last-scanned   # Clear lastScanned so next run fetches 7 days back
+python scanner.py --wipe-and-rescan      # Clear all JSONBin data then run a fresh 7-day scan
 python scanner.py --migrate-categories  # One-time: rename legacy category values in JSONBin
 ```
 
@@ -215,7 +218,7 @@ Mobile-first. All interactive elements min 44px touch target height.
 |---|---|
 | `VITE_JSONBIN_BIN_ID` | Same bin ID as backend |
 | `VITE_JSONBIN_API_KEY` | Same key as backend — escape every `$` as `\$` (Vite runs dotenv-expand) |
-| `VITE_APP_PIN` | PIN required to make any write action on the dashboard |
+| `VITE_APP_PIN` | PIN required to make any write action on the dashboard (React state only — no persistence) |
 
 All actual values live in the `.env` files (gitignored). See `docs/SERVICES.md` for account details and infrastructure IDs.
 

@@ -187,7 +187,7 @@ def fetch_emails(service, last_scanned: datetime | None = None) -> list[dict]:
         message_id, subject, sender_name, sender_email, date_received, body_text
     """
     time_clause = _build_time_query(last_scanned)
-    query = time_clause
+    query = f"{time_clause} -in:sent"
     log.info("Fetching emails — time filter: %s", time_clause)
 
     result = (
@@ -222,6 +222,7 @@ def fetch_emails(service, last_scanned: datetime | None = None) -> list[dict]:
         emails.append(
             {
                 "message_id": msg["id"],
+                "thread_id": msg["threadId"],
                 "subject": subject,
                 "sender_name": sender_name,
                 "sender_email": sender_email,
@@ -353,6 +354,7 @@ def analyze_emails(emails: list[dict]) -> dict:
             try:
                 src = emails[int(idx) - 1]
                 event["source_message_id"] = src["message_id"]
+                event["source_thread_id"] = src["thread_id"]
                 event["source_subject"] = src["subject"]
             except (IndexError, ValueError, TypeError):
                 pass
@@ -1024,6 +1026,14 @@ def _reset_last_scanned():
     log.info("lastScanned cleared — next run will use newer_than:%dd fallback", SCAN_DAYS_BACK)
 
 
+def _wipe_and_rescan():
+    """Wipe all events from JSONBin, then run a full scan over the past SCAN_DAYS_BACK days."""
+    log.info("=== Wiping JSONBin ===")
+    write_jsonbin(dict(_EMPTY_BIN))
+    log.info("JSONBin cleared — running fresh scan (last %d days)", SCAN_DAYS_BACK)
+    main()
+
+
 def _test_dedup():
     """Smoke-test: read current events from JSONBin and run the dedup pass (read-only)."""
     log.info("=== Dedup test starting ===")
@@ -1103,6 +1113,8 @@ if __name__ == "__main__":
         _test_jsonbin()
     elif "--reset-last-scanned" in sys.argv:
         _reset_last_scanned()
+    elif "--wipe-and-rescan" in sys.argv:
+        _wipe_and_rescan()
     elif "--test-dedup" in sys.argv:
         _test_dedup()
     elif "--test-reminder" in sys.argv:

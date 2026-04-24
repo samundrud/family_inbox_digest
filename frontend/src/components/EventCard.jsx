@@ -39,6 +39,13 @@ export default function EventCard({ event, onDismiss, onDelete, onEdit, isEditin
     notes:    event.notes    || '',
   })
   const [confirming, setConfirming] = useState(null) // null | 'dismiss' | 'delete'
+  const [copied, setCopied] = useState(false)
+
+  function handleCopy() {
+    navigator.clipboard.writeText(event.source_subject)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }
 
   const urgency  = urgencyStyle(event.date)
   const tagColor = categoryColors[event.category] || '#9090a8'
@@ -136,19 +143,7 @@ export default function EventCard({ event, onDismiss, onDelete, onEdit, isEditin
           <span style={{ fontSize: 11, fontWeight: 600, color: tagColor, background: tagColor + '22', borderRadius: 4, padding: '2px 7px' }}>
             {event.category}
           </span>
-          {event.source_message_id ? (
-            <a
-              href={`https://mail.google.com/mail/u/0/#all/${event.source_message_id}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              title={event.source_subject || 'View source email'}
-              style={{ fontSize: 12, color: '#55556a', textDecoration: 'none' }}
-            >
-              via {event.source} ↗
-            </a>
-          ) : (
-            <span style={{ fontSize: 12, color: '#55556a' }}>via {event.source}</span>
-          )}
+          <span style={{ fontSize: 12, color: '#55556a' }}>via {event.source}</span>
         </div>
         {event.notes && (
           <p style={{ fontSize: 13, color: '#9090a8', margin: '6px 0 0', lineHeight: 1.5 }}>{event.notes}</p>
@@ -160,7 +155,7 @@ export default function EventCard({ event, onDismiss, onDelete, onEdit, isEditin
             rel="noopener noreferrer"
             style={{ display: 'inline-block', marginTop: 8, fontSize: 12, fontWeight: 700, color: 'var(--accent)', textDecoration: 'none' }}
           >
-            Register →
+            Open link →
           </a>
         )}
       </div>
@@ -190,6 +185,13 @@ export default function EventCard({ event, onDismiss, onDelete, onEdit, isEditin
             onClick={() => requirePin(() => setConfirming('delete'))}
             style={{ ...iconBtnStyle, color: '#f87171' }}
           >✕</button>
+          {event.source_subject && (
+            <button
+              title={copied ? 'Copied!' : `Copy email subject: ${event.source_subject}`}
+              onClick={handleCopy}
+              style={{ ...iconBtnStyle, color: copied ? '#4ade80' : '#9090a8' }}
+            >⎘</button>
+          )}
         </div>
       )}
     </div>

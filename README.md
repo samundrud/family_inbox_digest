@@ -119,6 +119,7 @@ python scanner.py --test-reminder
 
 # Maintenance
 python scanner.py --reset-last-scanned   # Clear lastScanned so next run fetches 7 days back
+python scanner.py --wipe-and-rescan      # Clear all JSONBin data then run a fresh 7-day scan
 python scanner.py --migrate-categories   # One-time: rename legacy category values in JSONBin
 ```
 
