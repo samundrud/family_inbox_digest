@@ -89,7 +89,7 @@ def get_gmail_service():
 # Email fetching
 # ---------------------------------------------------------------------------
 
-_MAX_EMAILS = 30
+_MAX_EMAILS = 50
 _MAX_LOOKBACK_DAYS = 30
 _DIGEST_WINDOW_DAYS = 14
 
@@ -249,11 +249,11 @@ _SYSTEM_PROMPT = (
 )
 
 _USER_PROMPT_TEMPLATE = """\
-Here are emails from the family inbox this week:
+Here are emails from the family inbox:
 
 {formatted_emails}
 
-Return ONLY a valid JSON object with exactly two keys:
+Return ONLY a valid JSON object with exactly one key:
 
 "events": Array of important upcoming dates, deadlines, or required actions. For each:
   - id: unique string e.g. "evt_001"
@@ -277,15 +277,30 @@ Return ONLY a valid JSON object with exactly two keys:
   - dismissed: false
   - manually_added: false
 
-IMPORTANT: If a single email mentions multiple distinct dates or events (e.g. a Pro-D day AND an early dismissal), extract EACH as its own separate event entry. Never collapse two dates into one event.
-Include: picture day, field trips, permission slip deadlines, signup/registration deadlines, belt tests, tournaments, Pro-D day closures (no school = parent needs childcare), early dismissals (early pickup required), concerts, curriculum nights, fundraiser deadlines, any date requiring a parent to do something, personal reminders or family events sent directly by a parent, actionable items with no specific date (e.g. a form to return with no stated deadline) — include these with date: null.
-Omit: purely informational content with no action required and no specific date (e.g. general newsletters, weekly roundups with no deadlines or upcoming events).
+IMPORTANT: If a single email mentions multiple distinct dates or events (e.g. a Pro-D day AND an early dismissal, OR an early dismissal AND a student-led conference), extract EACH as its own separate event entry. Never collapse two dates into one event. Never omit a second event from an email just because you already captured a first one from it.
+Include: picture day, field trips, permission slip deadlines, signup/registration deadlines, belt tests, tournaments, Pro-D day closures (no school = parent needs childcare), early dismissals (early pickup required), concerts, curriculum nights, fundraiser deadlines, scheduled meetings, practices or classes with a specific date or time, library or item pickup notifications (a hold is ready = go pick it up), any date requiring a parent to do something or be somewhere, personal reminders or family events sent directly by a parent, actionable items with no specific date (e.g. a form to return with no stated deadline) — include these with date: null.
+Omit: only content that has BOTH no action required AND no specific upcoming date (e.g. general newsletters with no dates, weekly roundups with no deadlines, photos or recaps with nothing for the parent to do). When in doubt, include.
 
-"digestGroups": Weekly narrative summary. Include one entry per school, daycare, or activity provider. Do NOT include entries for emails sent directly by a parent — those only appear in events. For each entry:
-  - source: sender organization name
+Return ONLY valid JSON. No markdown fences. No preamble. No explanation.\
+"""
+
+
+_DIGEST_PROMPT_TEMPLATE = """\
+Here are all emails received by the family inbox over the past week:
+
+{formatted_emails}
+
+Return ONLY a valid JSON object with exactly one key:
+
+"digestGroups": A narrative summary of what happened this week, grouped by CATEGORY — not by individual organisation. Use the same six categories as the events list: school, daycare, scouts, soccer, GFT, other. Include one entry per category that had at least one email. If multiple organisations fall under the same category (e.g. MVPs and South Burnaby Metro Club are both "soccer"), combine their updates into a single entry. Do NOT include an entry for emails sent directly by a parent. For each entry:
+  - source: a short friendly label for the category, e.g. "School", "Daycare", "Scouts", "Soccer", "GFT After School", "Other"
   - category: one of: school, daycare, scouts, soccer, GFT, other
-  - week_of: ISO date of Monday of the current week (YYYY-MM-DD)
-  - bullets: array of 3-5 strings. Focus on NARRATIVE context — what kids are learning, classroom news, coach updates, event recaps, what to expect. Do NOT repeat specific dates or deadlines you already captured in the events array above; those are surfaced to parents separately. Instead provide the story behind the event: what it is, why it matters, what to prepare. Be specific. BAD: "There is a Pro-D Day on April 27." GOOD: "A professional development day is coming up — a good time to arrange alternative childcare or activities for the kids." BAD: "The teacher sent an update." GOOD: "Ms. Chen's class finished their weather unit and began ecosystems — ask your child about the terrarium they built."
+    Use "scouts" for Scouts Canada, Beavers, Cubs, or any scouting organisation.
+  - week_of: ISO date of the Monday of the week being summarised (YYYY-MM-DD)
+  - bullets: array of 3-5 strings combining updates from all organisations in this category. Tell the story of what happened — what kids are learning, what activities took place, what is coming up and why it matters, anything a parent would want to know beyond the bare dates. Do NOT list specific dates or deadlines (those appear separately in the parents' events list). Be concrete and specific.
+    BAD: "There is a Pro-D Day on April 27." GOOD: "A professional development day this week means the school building is closed — a good moment to plan an outing or arrange alternate care."
+    BAD: "The teacher sent an update." GOOD: "Ms. Chen's class finished their weather unit and started ecosystems — ask your child about the terrarium they built."
+    BAD: "There was an email about soccer." GOOD: "Both soccer clubs had activity this week — the spring season is in full swing with practices underway and a merchandise sale at Byrne Creek Secondary."
 
 Return ONLY valid JSON. No markdown fences. No preamble. No explanation.\
 """
@@ -324,17 +339,14 @@ def _parse_claude_json(raw: str) -> dict:
         )
 
 
-def analyze_emails(emails: list[dict]) -> dict:
-    """Send emails to Claude and return structured events and digest groups.
-
-    Returns a dict with keys "events" and "digestGroups", both lists.
-    """
+def analyze_emails(emails: list[dict]) -> list[dict]:
+    """Send emails to Claude and return a list of extracted events."""
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     formatted = _format_emails_for_claude(emails)
     user_prompt = _USER_PROMPT_TEMPLATE.format(formatted_emails=formatted)
 
-    log.info("Sending %d email(s) to Claude for analysis...", len(emails))
+    log.info("Sending %d email(s) to Claude for event extraction...", len(emails))
     message = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=8192,
@@ -344,9 +356,7 @@ def analyze_emails(emails: list[dict]) -> dict:
 
     raw_response = message.content[0].text
     result = _parse_claude_json(raw_response)
-
     events = result.get("events", [])
-    digest_groups = result.get("digestGroups", [])
 
     for event in events:
         idx = event.pop("source_email_index", None)
@@ -359,12 +369,37 @@ def analyze_emails(emails: list[dict]) -> dict:
             except (IndexError, ValueError, TypeError):
                 pass
 
-    log.info(
-        "Claude returned %d event(s) and %d digest group(s)",
-        len(events),
-        len(digest_groups),
+    log.info("Claude returned %d event(s)", len(events))
+    return events
+
+
+def generate_digest_groups(emails: list[dict]) -> list[dict]:
+    """Generate weekly narrative digest groups from a full week of emails.
+
+    Called once on Saturday with all emails from the past 7 days.
+    Returns a list of digest group dicts.
+    """
+    if not emails:
+        log.info("No emails for digest generation — returning empty list")
+        return []
+
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    formatted = _format_emails_for_claude(emails)
+    user_prompt = _DIGEST_PROMPT_TEMPLATE.format(formatted_emails=formatted)
+
+    log.info("Generating weekly digest from %d email(s)...", len(emails))
+    message = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=4096,
+        system=_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_prompt}],
     )
-    return {"events": events, "digestGroups": digest_groups}
+
+    raw_response = message.content[0].text
+    result = _parse_claude_json(raw_response)
+    groups = result.get("digestGroups", [])
+    log.info("Claude returned %d digest group(s)", len(groups))
+    return groups
 
 
 # ---------------------------------------------------------------------------
@@ -433,13 +468,14 @@ def write_jsonbin(data: dict) -> None:
     log.info("Wrote %d event(s), %d digest group(s) to JSONBin", event_count, group_count)
 
 
-def merge_data(existing: dict, new_events: list[dict], new_digest_groups: list[dict]) -> dict:
+def merge_data(existing: dict, new_events: list[dict], new_digest_groups: list[dict] | None) -> dict:
     """Merge new Claude results into existing JSONBin data.
 
     Merge rules:
     - Events: keep ALL existing events; add new events not already present by id;
-      auto-expire events more than 7 days past their date unless manually_added.
-    - DigestGroups: replace entirely with new Claude results.
+      auto-expire events more than 2 days past their date unless manually_added.
+    - DigestGroups: replaced only when new_digest_groups is not None (Saturday digest run);
+      on all other days, existing groups are preserved unchanged.
     - lastScanned: always updated to current UTC timestamp.
     """
     cutoff = date.today() - timedelta(days=2)
@@ -465,13 +501,26 @@ def merge_data(existing: dict, new_events: list[dict], new_digest_groups: list[d
         log.info("Auto-expired %d event(s) more than 2 days past their date", expired)
 
     existing_ids = {e["id"] for e in kept_events}
-    added_events: list[dict] = [e for e in new_events if e["id"] not in existing_ids]
-
-    merged_events = kept_events + added_events
+    added_events: list[dict] = []
+    for e in new_events:
+        if e["id"] in existing_ids:
+            continue
+        if e.get("manually_added"):
+            added_events.append(e)
+            continue
+        event_date_str = e.get("date", "")
+        try:
+            event_date = date.fromisoformat(event_date_str)
+            if event_date < cutoff:
+                expired += 1
+                continue
+        except (ValueError, TypeError):
+            pass
+        added_events.append(e)
 
     return {
-        "events": merged_events,
-        "digestGroups": new_digest_groups,
+        "events": kept_events + added_events,
+        "digestGroups": new_digest_groups if new_digest_groups is not None else existing.get("digestGroups", []),
         "lastScanned": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -882,20 +931,16 @@ def _test_fetch():
 
 
 def _test_analyze():
-    """Smoke-test: auth + fetch + Claude analysis, print resulting JSON."""
+    """Smoke-test: auth + fetch + Claude event extraction, print resulting JSON."""
     log.info("=== Analyze test starting ===")
     service = get_gmail_service()
     emails = fetch_emails(service)
     if not emails:
         log.info("No emails to analyze — forwarding a test email first is recommended.")
         return
-    result = analyze_emails(emails)
-    print(json.dumps(result, indent=2, ensure_ascii=False))
-    log.info(
-        "=== Analyze test passed: %d event(s), %d digest group(s) ===",
-        len(result["events"]),
-        len(result["digestGroups"]),
-    )
+    events = analyze_emails(emails)
+    print(json.dumps(events, indent=2, ensure_ascii=False))
+    log.info("=== Analyze test passed: %d event(s) ===", len(events))
 
 
 def _test_jsonbin():
@@ -973,20 +1018,31 @@ def main() -> None:
                 SCAN_DAYS_BACK,
             )
 
-    # Step 4: fetch emails
+    # Step 4: fetch incremental emails (since last scan)
     emails = fetch_emails(service, last_scanned=last_scanned)
 
-    # Step 5: process new emails if any, otherwise use existing data
+    # Step 5: extract events from new emails
+    new_events: list[dict] = []
     if emails:
-        analysis = analyze_emails(emails)
-        final_data = merge_data(existing, analysis["events"], analysis["digestGroups"])
-        final_data["events"] = dedup_events(final_data["events"])
+        new_events = analyze_emails(emails)
     else:
         log.info("No new emails found")
-        existing["lastScanned"] = datetime.now(timezone.utc).isoformat()
-        final_data = existing
 
-    # Step 6: write (or dry-run print)
+    # Step 5b: on Saturday, fetch the full week and generate a fresh digest
+    today_name = date.today().strftime("%A")
+    is_digest_day = force_digest or today_name == DIGEST_DAY
+    new_digest_groups: list[dict] | None = None
+    if is_digest_day:
+        log.info("Digest day — fetching full week of emails for digest generation...")
+        weekly_emails = fetch_emails(service, last_scanned=None)  # falls back to SCAN_DAYS_BACK
+        new_digest_groups = generate_digest_groups(weekly_emails)
+
+    # Step 6: merge into existing data (digest groups unchanged on non-Saturday days)
+    final_data = merge_data(existing, new_events, new_digest_groups)
+    if new_events:
+        final_data["events"] = dedup_events(final_data["events"])
+
+    # Step 7: write (or dry-run print)
     if dry_run:
         log.info("DRY RUN — would write the following to JSONBin:")
         print(json.dumps(final_data, indent=2, ensure_ascii=False))
@@ -995,12 +1051,11 @@ def main() -> None:
 
     write_jsonbin(final_data)
 
-    # Step 7: day-before reminder (fires every run)
+    # Step 8: day-before reminder (fires every run)
     send_reminder_email(final_data["events"], force=force_reminder)
 
-    # Step 8: Saturday digest
-    today_name = date.today().strftime("%A")
-    if force_digest or today_name == DIGEST_DAY:
+    # Step 9: Saturday digest email
+    if is_digest_day:
         send_digest_email(
             final_data["events"],
             final_data.get("digestGroups", []),

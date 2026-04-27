@@ -13,16 +13,16 @@ A private family dashboard that reads a dedicated Gmail inbox where school and a
 flowchart LR
     Gmail["📧 Gmail inbox\n(family forwarding account)"]
     Scanner["🖥️ scanner.py\n(Mac · launchd · 7am daily)"]
-    Claude["🤖 Claude Sonnet\n(Anthropic API · 2 passes)"]
+    Claude["🤖 Claude Sonnet\n(Anthropic API · up to 3 passes)"]
     JSONBin["🗄️ JSONBin.io\n(data store)"]
     Frontend["📱 React SPA\n(Firebase Hosting · PIN-gated)"]
     ReminderEmail["📅 Reminder email\n(day before events)"]
     DigestEmail["📋 Digest email\n(Saturday)"]
     Parents["👨‍👩‍👧‍👦 Parents"]
 
-    Gmail -->|"Gmail API · OAuth2"| Scanner
-    Scanner -->|"analyze + dedup"| Claude
-    Claude -->|"events + digest groups"| Scanner
+    Gmail -->|"incremental fetch (daily)\nfull 7-day fetch (Saturday)"| Scanner
+    Scanner -->|"events prompt (daily)\ndigest prompt (Saturday)"| Claude
+    Claude -->|"events · dedup · digest groups"| Scanner
     Scanner -->|"PUT · 30s timeout · 3 retries"| JSONBin
     JSONBin -->|"GET · browser"| Frontend
     Frontend <-->|"view · add · edit · dismiss\n(PIN-gated writes)"| Parents

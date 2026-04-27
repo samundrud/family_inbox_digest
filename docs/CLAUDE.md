@@ -7,8 +7,8 @@ This file gives an AI assistant the context needed to work on this project witho
 ## What this project does
 
 Family Inbox Intelligence is a private family dashboard. A dedicated Gmail account (configured via `FAMILY_INBOX_EMAIL`) receives forwarded emails from schools and children's activity providers. A Python scanner reads those emails daily, sends them to Claude, and extracts:
-- **Events:** upcoming dates, deadlines, and action items
-- **Digest groups:** a weekly narrative summary grouped by sender
+- **Events:** upcoming dates, deadlines, and action items (extracted daily from new emails)
+- **Digest groups:** a weekly narrative summary grouped by category (generated once on Saturday from all emails of the past week)
 
 Results are stored in JSONBin.io. A React SPA reads JSONBin and displays everything. Both parents can view, add, edit, and dismiss events from their phones. Every Saturday a digest email is sent to both parents via Gmail SMTP. A day-before reminder fires on any day an event is coming up the next day.
 
@@ -21,22 +21,26 @@ Results are stored in JSONBin.io. A React SPA reads JSONBin and displays everyth
 ```mermaid
 flowchart TD
     Start([Scanner starts]) --> Auth["Authenticate Gmail\n(token.json · OAuth2)"]
-    Auth --> ReadBin["Read JSONBin\n(get lastScanned + existing data)"]
-    ReadBin --> Fetch["Fetch emails since lastScanned\n(1h overlap buffer · fallback: newer_than:7d)"]
-    Fetch --> Empty{0 new emails?}
-    Empty -->|yes| UpdateTS["Update lastScanned in JSONBin"]
-    UpdateTS --> Reminder1["Send day-before reminder email\n(if events tomorrow)"]
-    Reminder1 --> Done1([Done])
-    Empty -->|no| Claude1["Claude pass 1: analyze emails\n(extract events + digest groups)"]
-    Claude1 --> Merge["Merge into existing:\n① Add new events by ID\n② Auto-expire >2 days past date\n③ Never remove manually_added"]
-    Merge --> Dedup["Claude pass 2: dedup\n(remove duplicate events)"]
-    Dedup --> Write["Write merged data to JSONBin\n(30s timeout · 3 retries)"]
-    Write --> Reminder2["Send day-before reminder email\n(if events tomorrow)"]
-    Reminder2 --> Saturday{"Saturday or\n--send-digest?"}
-    Saturday -->|yes| Email["Gmail SMTP → digest email to parents"]
-    Saturday -->|no| Done2([Done])
-    Email --> Done2
+    Auth --> ReadBin["Read JSONBin\n(events + digestGroups + lastScanned)"]
+    ReadBin --> Fetch["Fetch emails since lastScanned\n(incremental · 1h overlap buffer · cap 50)"]
+    Fetch --> HasEmails{New emails?}
+    HasEmails -->|yes| Claude1["Claude pass 1: extract events\n(events-only prompt)"]
+    HasEmails -->|no| DigestCheck
+    Claude1 --> Merge["Merge into existing data:\n• New events added by ID\n• Expire >2 days past (new + existing)\n• digestGroups: unchanged"]
+    Merge --> Dedup["Claude pass 2: dedup events"]
+    Dedup --> DigestCheck{Saturday or\n--send-digest?}
+    DigestCheck -->|no| Write
+    DigestCheck -->|yes| FullFetch["Full 7-day email fetch\n(separate Gmail query)"]
+    FullFetch --> Claude3["Claude pass 3: generate digest\n(digest-only prompt · one entry per category)"]
+    Claude3 --> Write["Write to JSONBin\n(30s timeout · 3 retries)"]
+    Write --> Reminder["Day-before reminder email\n(if events tomorrow)"]
+    Reminder --> DigestEmail{Saturday or\n--send-digest?}
+    DigestEmail -->|no| Done([Done])
+    DigestEmail -->|yes| Email["Gmail SMTP → weekly digest email\n(upcoming events + narrative digest)"]
+    Email --> Done
 ```
+
+**Two separate Claude calls:** The daily events prompt asks only for events (no digest generation). On Saturday a second, independent call with a full 7-day email fetch generates the digest — so the narrative always covers the complete week, not just the most recent batch of emails.
 
 ---
 
@@ -109,9 +113,9 @@ flowchart TD
   ],
   "digestGroups": [
     {
-      "source": "Springfield Elementary",
+      "source": "School",
       "category": "school",
-      "week_of": "2026-04-14",
+      "week_of": "2026-04-21",
       "bullets": ["The class finished their weather unit and began ecosystems."]
     }
   ]
@@ -125,9 +129,13 @@ flowchart TD
 - `source_subject` — subject line of the source email. Shown as a tooltip on desktop; can be copied to clipboard via the ⎘ button on the EventCard to search Gmail manually.
 - `link` and `source_*` fields are absent on manually-added events and on events extracted before these fields were introduced.
 
+**DigestGroup fields:**
+- `source` — friendly category label (e.g. "School", "Soccer", "GFT After School", "Other"). One entry per category, not per organisation.
+- `week_of` — Monday of the week being summarised (ISO date). Set by the digest generation pass.
+
 **Merge rules (applied on every scanner run):**
-- Events: keep all existing; add new Claude events only if their `id` doesn't already exist; auto-expire events more than 2 days past their date unless `manually_added`.
-- DigestGroups: always replace entirely with new Claude output.
+- Events: keep all existing; add new Claude events only if their `id` doesn't already exist; auto-expire events more than 2 days past their date unless `manually_added`. The expiry check applies to both existing and newly extracted events.
+- DigestGroups: unchanged on daily runs. Replaced entirely on Saturday from a dedicated full 7-day Claude call.
 - `lastScanned`: always update to current UTC timestamp.
 
 ---
