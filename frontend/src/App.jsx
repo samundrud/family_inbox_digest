@@ -80,7 +80,7 @@ export default function App() {
 
   // Derived values
   const visibleEvents = (data.events || [])
-    .filter((e) => filter === 'all' || e.category === filter)
+    .filter((e) => !e.deleted && (filter === 'all' || e.category === filter))
     .slice()
     .sort((a, b) => {
       // Dismissed → bottom
@@ -111,10 +111,9 @@ export default function App() {
   }
 
   async function handleDelete(id) {
-    const removed = (data.events || []).find((e) => e.id === id)
-    setData((prev) => ({ ...prev, events: prev.events.filter((e) => e.id !== id) }))
+    setData((prev) => ({ ...prev, events: prev.events.map((e) => e.id === id ? { ...e, deleted: true } : e) }))
     try { await deleteEvent(id) } catch (e) {
-      setData((prev) => ({ ...prev, events: removed ? [...prev.events, removed] : prev.events }))
+      setData((prev) => ({ ...prev, events: prev.events.map((ev) => ev.id === id ? { ...ev, deleted: false } : ev) }))
       setError(e.message)
     }
   }

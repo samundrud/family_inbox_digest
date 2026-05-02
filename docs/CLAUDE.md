@@ -22,16 +22,16 @@ Results are stored in JSONBin.io. A React SPA reads JSONBin and displays everyth
 flowchart TD
     Start([Scanner starts]) --> Auth["Authenticate Gmail\n(token.json · OAuth2)"]
     Auth --> ReadBin["Read JSONBin\n(events + digestGroups + lastScanned)"]
-    ReadBin --> Fetch["Fetch emails since lastScanned\n(incremental · 1h overlap buffer · cap 50)"]
+    ReadBin --> Fetch["Fetch emails since lastScanned\n(incremental · 1h overlap buffer · cap 50\n--days N overrides window for this run)"]
     Fetch --> HasEmails{New emails?}
-    HasEmails -->|yes| Claude1["Claude pass 1: extract events\n(events-only prompt)"]
+    HasEmails -->|yes| Claude1["Claude pass 1: extract events\n(two-step: per-email audit then JSON)"]
     HasEmails -->|no| DigestCheck
-    Claude1 --> Merge["Merge into existing data:\n• New events added by ID\n• Expire >2 days past (new + existing)\n• digestGroups: unchanged"]
+    Claude1 --> Merge["Merge into existing data:\n• New events added by composite key\n• Expire auto events >2 days past date\n• Expire deleted tombstones >30 days old\n• digestGroups: unchanged"]
     Merge --> Dedup["Claude pass 2: dedup events"]
     Dedup --> DigestCheck{Saturday or\n--send-digest?}
     DigestCheck -->|no| Write
-    DigestCheck -->|yes| FullFetch["Full 7-day email fetch\n(separate Gmail query)"]
-    FullFetch --> Claude3["Claude pass 3: generate digest\n(digest-only prompt · one entry per category)"]
+    DigestCheck -->|yes| FullFetch["Full SCAN_DAYS_BACK email fetch\n(separate Gmail query)"]
+    FullFetch --> Claude3["Claude pass 3: generate digest\n(digest-only prompt · one entry per category\nbullets are objects: {text, link})"]
     Claude3 --> Write["Write to JSONBin\n(30s timeout · 3 retries)"]
     Write --> Reminder["Day-before reminder email\n(if events tomorrow)"]
     Reminder --> DigestEmail{Saturday or\n--send-digest?}
@@ -40,7 +40,7 @@ flowchart TD
     Email --> Done
 ```
 
-**Two separate Claude calls:** The daily events prompt asks only for events (no digest generation). On Saturday a second, independent call with a full 7-day email fetch generates the digest — so the narrative always covers the complete week, not just the most recent batch of emails.
+**Two separate Claude calls:** The daily events prompt uses a two-step format — Claude writes a one-line audit for every email before outputting JSON, ensuring no email is silently skipped. On Saturday a second, independent call generates the digest from a full `SCAN_DAYS_BACK`-day email fetch, so the narrative always covers the complete window.
 
 ---
 
@@ -108,6 +108,7 @@ flowchart TD
       "source_thread_id": "18f2b3c4d5e6f7a8",
       "source_subject": "Summer Camp Registration Now Open",
       "dismissed": false,
+      "deleted": false,
       "manually_added": false
     }
   ],
@@ -116,47 +117,60 @@ flowchart TD
       "source": "School",
       "category": "school",
       "week_of": "2026-04-21",
-      "bullets": ["The class finished their weather unit and began ecosystems."]
+      "bullets": [
+        { "text": "The class finished their weather unit and began ecosystems.", "link": null },
+        { "text": "Student Led Conferences are coming up — sign up for a time slot.", "link": "https://example.com/signup" }
+      ]
     }
   ]
 }
 ```
 
 **Event fields:**
-- `link` — URL if present in the source email (registration, survey, booking, etc.); `null` otherwise. Never set for informational or newsletter links. Displayed as "Open link →" on the EventCard.
-- `source_message_id` — Gmail API message ID of the source email.
-- `source_thread_id` — Gmail API thread ID of the source email (more reliable than message ID for lookups).
+- `link` — URL if present in the source email (registration, survey, booking, document sign-up, etc.); `null` otherwise. The link must be directly actionable and come from the same email as the event. Never set for informational or newsletter links. Displayed as "Open link →" on the EventCard.
+- `dismissed` — `true` if a parent marked the event as done. Kept in storage (renders crossed out at bottom of list); never deleted from JSONBin so the scanner's dedup key remains intact.
+- `deleted` — `true` if a parent deleted the event. Hidden from the UI entirely but kept in JSONBin as a tombstone for 30 days so the scanner cannot re-extract it from the same email. Expired automatically by `merge_data` after 30 days (using `deleted_at`).
+- `deleted_at` — ISO timestamp set when `deleted` is set to `true`. Used by `merge_data` to expire tombstones after 30 days.
+- `source_message_id` — Gmail API message ID of the source email. Used as part of the composite dedup key `(source_message_id, title)`.
+- `source_thread_id` — Gmail API thread ID of the source email.
 - `source_subject` — subject line of the source email. Shown as a tooltip on desktop; can be copied to clipboard via the ⎘ button on the EventCard to search Gmail manually.
-- `link` and `source_*` fields are absent on manually-added events and on events extracted before these fields were introduced.
+- `link`, `source_*`, `deleted`, and `deleted_at` fields are absent on manually-added events and on events extracted before these fields were introduced.
 
 **DigestGroup fields:**
 - `source` — friendly category label (e.g. "School", "Soccer", "GFT After School", "Other"). One entry per category, not per organisation.
 - `week_of` — Monday of the week being summarised (ISO date). Set by the digest generation pass.
+- `bullets` — array of objects `{ text: string, link: string | null }`. `link` is included only when the bullet directly references something the parent should act on via that specific link. Frontend falls back gracefully to plain strings for bullets generated before this schema change.
 
 **Merge rules (applied on every scanner run):**
-- Events: keep all existing; add new Claude events only if their `id` doesn't already exist; auto-expire events more than 2 days past their date unless `manually_added`. The expiry check applies to both existing and newly extracted events.
-- DigestGroups: unchanged on daily runs. Replaced entirely on Saturday from a dedicated full 7-day Claude call.
-- `lastScanned`: always update to current UTC timestamp.
+- Events: keep all existing; add new Claude events only if their composite key `(source_message_id, title)` doesn't already exist; auto-expire auto-generated events more than 2 days past their date.
+- Deleted tombstones (`deleted: true`): kept in storage so their dedup key blocks re-extraction; expired after 30 days from `deleted_at`.
+- `manually_added` events: kept forever (never auto-expired) unless `deleted: true` (then tombstone rules apply).
+- DigestGroups: unchanged on daily runs. Replaced entirely on Saturday from a dedicated full `SCAN_DAYS_BACK`-day Claude call.
+- `lastScanned`: always updated to current UTC timestamp.
 
 ---
 
 ## Scanner CLI flags
 
 ```bash
-python scanner.py                    # Normal run
-python scanner.py --dry-run          # All steps, no writes, prints final JSON to console
-python scanner.py --send-digest      # Force send Saturday digest email regardless of day
-python scanner.py --send-reminder    # Force send day-before reminder email regardless of schedule
-python scanner.py --test-auth        # Test Gmail OAuth only
-python scanner.py --test-fetch       # Test email fetching only (prints subjects)
-python scanner.py --test-analyze     # Test Claude analysis only (prints raw JSON)
-python scanner.py --test-jsonbin     # Test JSONBin read/write only
-python scanner.py --test-dedup       # Test dedup pass on current JSONBin events (read-only)
-python scanner.py --test-reminder    # Preview tomorrow's reminder events (read-only, no send)
-python scanner.py --reset-last-scanned   # Clear lastScanned so next run fetches 7 days back
-python scanner.py --wipe-and-rescan      # Clear all JSONBin data then run a fresh 7-day scan
-python scanner.py --migrate-categories  # One-time: rename legacy category values in JSONBin
+python scanner.py                         # Normal run
+python scanner.py --dry-run               # All steps, no writes, prints final JSON to console
+python scanner.py --send-digest           # Force send Saturday digest email regardless of day
+python scanner.py --send-reminder         # Force send day-before reminder email regardless of schedule
+python scanner.py --days 14               # Override fetch window for this run only (default: SCAN_DAYS_BACK)
+python scanner.py --test-auth             # Test Gmail OAuth only
+python scanner.py --test-fetch            # Test email fetching only (prints subjects)
+python scanner.py --test-analyze          # Test Claude analysis only (prints raw JSON)
+python scanner.py --test-jsonbin          # Test JSONBin read/write only
+python scanner.py --test-dedup            # Test dedup pass on current JSONBin events (read-only)
+python scanner.py --test-reminder         # Preview tomorrow's reminder events (read-only, no send)
+python scanner.py --reset-last-scanned    # Clear lastScanned so next run fetches SCAN_DAYS_BACK days
+python scanner.py --wipe-and-rescan       # Clear all JSONBin data then run a fresh scan
+python scanner.py --wipe-and-rescan --days 14  # Same but with a custom lookback window
+python scanner.py --migrate-categories    # One-time: rename legacy category values in JSONBin
 ```
+
+`--days N` can be combined with any command that triggers a scan. It overrides `SCAN_DAYS_BACK` for that run only — the config file is never modified.
 
 ---
 

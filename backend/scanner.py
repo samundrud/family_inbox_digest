@@ -164,14 +164,14 @@ def _parse_sender(raw_from: str) -> tuple[str, str]:
     return name, addr
 
 
-def _build_time_query(last_scanned: datetime | None) -> str:
+def _build_time_query(last_scanned: datetime | None, days_back: int = SCAN_DAYS_BACK) -> str:
     """Return the Gmail time-range clause for the search query.
 
     Uses last_scanned with a 1-hour overlap buffer and caps lookback at
-    _MAX_LOOKBACK_DAYS. Falls back to SCAN_DAYS_BACK if no timestamp stored.
+    _MAX_LOOKBACK_DAYS. Falls back to days_back if no timestamp stored.
     """
     if last_scanned is None:
-        return f"newer_than:{SCAN_DAYS_BACK}d"
+        return f"newer_than:{days_back}d"
 
     max_lookback = datetime.now(timezone.utc) - timedelta(days=_MAX_LOOKBACK_DAYS)
     cutoff = max(last_scanned - timedelta(hours=1), max_lookback)
@@ -179,15 +179,15 @@ def _build_time_query(last_scanned: datetime | None) -> str:
     return f"after:{after_ts}"
 
 
-def fetch_emails(service, last_scanned: datetime | None = None) -> list[dict]:
+def fetch_emails(service, last_scanned: datetime | None = None, days_back: int = SCAN_DAYS_BACK) -> list[dict]:
     """Fetch emails forwarded from the parent accounts.
 
     Uses last_scanned as the Gmail after: cutoff (with a 1-hour overlap buffer),
-    falling back to SCAN_DAYS_BACK days if no timestamp is stored.
+    falling back to days_back days if no timestamp is stored.
     Returns a list of dicts with keys:
         message_id, subject, sender_name, sender_email, date_received, body_text
     """
-    time_clause = _build_time_query(last_scanned)
+    time_clause = _build_time_query(last_scanned, days_back=days_back)
     query = f"{time_clause} -in:sent"
     log.info("Fetching emails — time filter: %s", time_clause)
 
@@ -254,9 +254,21 @@ Here are emails from the family inbox:
 
 {formatted_emails}
 
-Return ONLY a valid JSON object with exactly one key:
+Work in two steps. Write both steps in your response.
 
-"events": Array of ALL upcoming dates, deadlines, and required actions extracted from these emails. Cast a wide net — it is always better to include too much than to miss something. For each:
+STEP 1 — AUDIT (write this first, before any JSON):
+Go through every numbered email one by one — Email 1, Email 2, Email 3, and so on.
+For each, write exactly one line:
+  Email N: [title of event(s) extracted]
+  Email N: no events — [one-word reason: newsletter / recap / duplicate / other]
+You MUST write a line for every email. Missing any email is an error.
+If a single email contains multiple distinct events, list all of them on that line.
+A $9 school payment request is just as required as a field trip form — do not filter by importance.
+
+STEP 2 — JSON (write this immediately after the audit, no separator):
+Output a valid JSON object with exactly one key "events" containing every event identified in Step 1.
+
+"events": Array of ALL upcoming dates, deadlines, and required actions. For each:
   - id: unique string e.g. "evt_001"
   - title: concise name. When the actionable date is a deadline rather than the event itself, reflect that in the title e.g. "Summer BJJ Camp — Register by May 25" rather than just "Summer BJJ Camp".
   - date: YYYY-MM-DD, chosen by this priority order:
@@ -274,16 +286,18 @@ Return ONLY a valid JSON object with exactly one key:
     For emails sent directly by a parent, use the sender's first name e.g. "Sarah", or "Family" if the name is unclear.
   - source_email_index: the 1-based index of the email this event was extracted from, matching the "--- Email N ---" labels above
   - notes: one sentence of actionable context for the parent e.g. "Wear class colour — blue for Grade 3". If the actionable date differs from the actual event date, always include the event date here e.g. "Camp runs June 26–July 2 in Burnaby. Register by May 25 for the early-bird rate."
-  - link: URL of a registration, sign-up, or payment page if one is present in the email — e.g. a link labelled "Register here", "Sign up", "Book now", or "Pay online". Set to null if no such link exists. Never include general school website links, newsletter links, unsubscribe links, or tracking URLs.
+  - link: URL if the source email for this event (matching source_email_index) contains a link the parent needs to follow to take a required action — sign up, register, book, pay, view a form, or respond. The link MUST come from the same email as the event — never use a link from a different email. Include it regardless of how the link is labelled or what file type it points to; a shared Google Doc, Word document (.docx), or spreadsheet used as a sign-up sheet is just as valid as a web form. If the email says "sign up via the link below", "use this link to book", or "add your name to the document", that counts. Set to null if no actionable link exists. Never include general school or club website homepages, newsletter archive links, unsubscribe links, or tracking/redirect URLs.
   - dismissed: false
   - manually_added: false
 
-BEFORE writing your JSON, go through every numbered email above one by one — Email 1, Email 2, Email 3, and so on — and ask: does this email contain a payment, a date, a deadline, or any required action? If yes, it must appear in your events array. Do not skip any email. A $9 school payment request is just as required as a field trip permission form.
-IMPORTANT: If a single email mentions multiple distinct dates or events (e.g. a Pro-D day AND an early dismissal, OR an early dismissal AND a student-led conference), extract EACH as its own separate event entry. Never collapse two dates into one event. Never omit a second event from an email just because you already captured a first one from it.
-Include everything that has a date OR requires any action from a parent, no matter how small. This includes: picture day, field trips, permission slip deadlines, signup/registration deadlines, belt tests, tournaments, Pro-D day closures, early dismissals, concerts, curriculum nights, fundraiser deadlines, school program fees or payments (e.g. SchoolCash requests — even small amounts like $9), scheduled meetings, practices or classes with a specific date or time, library or item pickup notifications, any date requiring a parent to do something or be somewhere, personal reminders or family events sent directly by a parent, actionable items with no specific date (e.g. a form to return with no stated deadline) — include these with date: null.
-Omit ONLY content that has both no action required AND no specific date at all — e.g. a general newsletter with no deadlines, a photo recap with nothing to do. If there is any date or any action, include it. Do not filter based on perceived importance or dollar amount.
+Rules:
+- Every event listed in Step 1 MUST appear in the JSON. The audit and JSON must match.
+- If a single email mentions multiple distinct dates or events, extract EACH as its own entry. Never collapse two dates into one event.
+- Include everything that has a date OR requires any action: picture day, field trips, permission slip deadlines, signup/registration deadlines, belt tests, tournaments, Pro-D day closures, early dismissals, concerts, curriculum nights, fundraiser deadlines, school fees or payments, scheduled meetings, practices, library pickups, personal reminders or family events sent directly by a parent, actionable items with no date (use date: null).
+- Omit ONLY content that has both no action required AND no specific date — e.g. a general newsletter with no deadlines, a photo recap with nothing to do.
+- Do not filter by perceived importance or dollar amount.
 
-Return ONLY valid JSON. No markdown fences. No preamble. No explanation.\
+No markdown fences around the JSON.\
 """
 
 
@@ -299,10 +313,12 @@ Return ONLY a valid JSON object with exactly one key:
   - category: one of: school, daycare, scouts, soccer, GFT, other
     Use "scouts" for Scouts Canada, Beavers, Cubs, or any scouting organisation.
   - week_of: ISO date of the Monday of the week being summarised (YYYY-MM-DD)
-  - bullets: array of 3-5 strings combining updates from all organisations in this category. Tell the story of what happened — what kids are learning, what activities took place, what is coming up and why it matters, anything a parent would want to know beyond the bare dates. Do NOT list specific dates or deadlines (those appear separately in the parents' events list). Be concrete and specific.
-    BAD: "There is a Pro-D Day on April 27." GOOD: "A professional development day this week means the school building is closed — a good moment to plan an outing or arrange alternate care."
-    BAD: "The teacher sent an update." GOOD: "Ms. Chen's class finished their weather unit and started ecosystems — ask your child about the terrarium they built."
-    BAD: "There was an email about soccer." GOOD: "Both soccer clubs had activity this week — the spring season is in full swing with practices underway and a merchandise sale at Byrne Creek Secondary."
+  - bullets: array of 3-5 objects, each with:
+    - text: the narrative bullet string. Tell the story of what happened — what kids are learning, what activities took place, what is coming up and why it matters, anything a parent would want to know beyond the bare dates. Do NOT list specific dates or deadlines (those appear separately in the parents' events list). Be concrete and specific.
+      BAD: "There is a Pro-D Day on April 27." GOOD: "A professional development day this week means the school building is closed — a good moment to plan an outing or arrange alternate care."
+      BAD: "The teacher sent an update." GOOD: "Ms. Chen's class finished their weather unit and started ecosystems — ask your child about the terrarium they built."
+      BAD: "There was an email about soccer." GOOD: "Both soccer clubs had activity this week — the spring season is in full swing with practices underway and a merchandise sale at Byrne Creek Secondary."
+    - link: a URL only if this specific bullet directly references an action the parent needs to take via that link (sign up, register, pay, complete a survey, view a form). The link must be relevant to the content described in this bullet — never attach a link from a different topic or a different part of the email. If the bullet is about seasonal reminders and the link is for a survey about something else, they do not belong together. Shared documents used as sign-up sheets count. Do not include general homepages, newsletter archives, or unsubscribe links. If no link is directly relevant to this bullet's content, set to null.
 
 Return ONLY valid JSON. No markdown fences. No preamble. No explanation.\
 """
@@ -322,7 +338,13 @@ def _format_emails_for_claude(emails: list[dict]) -> str:
 
 
 def _parse_claude_json(raw: str) -> dict:
-    """Parse JSON from Claude's response, stripping markdown fences if needed."""
+    """Parse JSON from Claude's response.
+
+    Handles three formats:
+    - Pure JSON
+    - JSON wrapped in markdown fences
+    - Audit text followed by JSON (two-step prompt format)
+    """
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
@@ -334,11 +356,20 @@ def _parse_claude_json(raw: str) -> dict:
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
-        log.error("Claude returned invalid JSON:\n%s", raw)
-        raise ValueError(
-            "Claude response could not be parsed as JSON after stripping markdown fences. "
-            "Raw response logged above."
-        )
+        pass
+
+    # Extract JSON object that follows audit/preamble text
+    idx = raw.find('{')
+    if idx > 0:
+        try:
+            return json.loads(raw[idx:])
+        except json.JSONDecodeError:
+            pass
+
+    log.error("Claude returned invalid JSON:\n%s", raw)
+    raise ValueError(
+        "Claude response could not be parsed as JSON. Raw response logged above."
+    )
 
 
 def analyze_emails(emails: list[dict]) -> list[dict]:
@@ -357,6 +388,10 @@ def analyze_emails(emails: list[dict]) -> list[dict]:
     )
 
     raw_response = message.content[0].text
+    # Log the audit section so we can verify every email was processed
+    json_start = raw_response.find('{')
+    if json_start > 0:
+        log.info("Claude audit:\n%s", raw_response[:json_start].strip())
     result = _parse_claude_json(raw_response)
     events = result.get("events", [])
 
@@ -474,22 +509,40 @@ def write_jsonbin(data: dict) -> None:
     log.info("Wrote %d event(s), %d digest group(s) to JSONBin", event_count, group_count)
 
 
+_TOMBSTONE_DAYS = 30
+
+
 def merge_data(existing: dict, new_events: list[dict], new_digest_groups: list[dict] | None) -> dict:
     """Merge new Claude results into existing JSONBin data.
 
     Merge rules:
     - Events: keep ALL existing events; add new events not already present by id;
       auto-expire events more than 2 days past their date unless manually_added.
+    - Deleted tombstones (deleted:true): kept for 30 days so the dedup key blocks
+      re-extraction from the same email, then expired.
     - DigestGroups: replaced only when new_digest_groups is not None (Saturday digest run);
       on all other days, existing groups are preserved unchanged.
     - lastScanned: always updated to current UTC timestamp.
     """
     cutoff = date.today() - timedelta(days=2)
+    tombstone_cutoff = datetime.now(timezone.utc) - timedelta(days=_TOMBSTONE_DAYS)
 
     # Keep all existing events, expiring only old auto-generated ones.
     kept_events: list[dict] = []
     expired = 0
     for e in existing.get("events", []):
+        # Deleted tombstones: keep for 30 days so dedup blocks re-extraction, then drop.
+        if e.get("deleted"):
+            try:
+                deleted_at = datetime.fromisoformat(e.get("deleted_at", ""))
+                if deleted_at < tombstone_cutoff:
+                    expired += 1
+                    continue
+            except (ValueError, TypeError):
+                expired += 1
+                continue
+            kept_events.append(e)
+            continue
         if e.get("manually_added"):
             kept_events.append(e)
             continue
@@ -706,7 +759,9 @@ def _build_digest_html(events: list[dict], digest_groups: list[dict]) -> str:
         icon = meta["icon"]
         source = html.escape(group.get("source", ""))
         bullets = "".join(
-            f'<li style="margin-bottom:6px;">{html.escape(b)}</li>'
+            f'<li style="margin-bottom:6px;">{html.escape(b["text"] if isinstance(b, dict) else b)}'
+            + (f' <a href="{html.escape(b["link"])}" style="color:#6c8ebf;">↗</a>' if isinstance(b, dict) and b.get("link") else "")
+            + "</li>"
             for b in group.get("bullets", [])
         )
         groups_parts.append(f"""
@@ -1003,7 +1058,7 @@ def _test_jsonbin():
 _SENTINEL_PATH = Path.home() / "Desktop" / "family-inbox" / "last-run-date"
 
 
-def main() -> None:
+def main(days_back: int = SCAN_DAYS_BACK) -> None:
     args = set(sys.argv[1:])
     dry_run = "--dry-run" in args
     force_digest = "--send-digest" in args
@@ -1037,7 +1092,7 @@ def main() -> None:
             )
 
     # Step 4: fetch incremental emails (since last scan)
-    emails = fetch_emails(service, last_scanned=last_scanned)
+    emails = fetch_emails(service, last_scanned=last_scanned, days_back=days_back)
 
     # Step 5: extract events from new emails
     new_events: list[dict] = []
@@ -1052,7 +1107,7 @@ def main() -> None:
     new_digest_groups: list[dict] | None = None
     if is_digest_day:
         log.info("Digest day — fetching full week of emails for digest generation...")
-        weekly_emails = fetch_emails(service, last_scanned=None)  # falls back to SCAN_DAYS_BACK
+        weekly_emails = fetch_emails(service, last_scanned=None, days_back=days_back)
         new_digest_groups = generate_digest_groups(weekly_emails)
 
     # Step 6: merge into existing data (digest groups unchanged on non-Saturday days)
@@ -1099,12 +1154,12 @@ def _reset_last_scanned():
     log.info("lastScanned cleared — next run will use newer_than:%dd fallback", SCAN_DAYS_BACK)
 
 
-def _wipe_and_rescan():
-    """Wipe all events from JSONBin, then run a full scan over the past SCAN_DAYS_BACK days."""
+def _wipe_and_rescan(days: int = SCAN_DAYS_BACK):
+    """Wipe all events from JSONBin, then run a full scan over the past `days` days."""
     log.info("=== Wiping JSONBin ===")
     write_jsonbin(dict(_EMPTY_BIN))
-    log.info("JSONBin cleared — running fresh scan (last %d days)", SCAN_DAYS_BACK)
-    main()
+    log.info("JSONBin cleared — running fresh scan (last %d days)", days)
+    main(days_back=days)
 
 
 def _test_dedup():
@@ -1176,6 +1231,16 @@ def _migrate_categories() -> None:
 
 
 if __name__ == "__main__":
+    # Parse optional --days N argument
+    _days_back = SCAN_DAYS_BACK
+    if "--days" in sys.argv:
+        _idx = sys.argv.index("--days")
+        try:
+            _days_back = int(sys.argv[_idx + 1])
+        except (IndexError, ValueError):
+            log.error("--days requires an integer argument e.g. --days 14")
+            sys.exit(1)
+
     if "--test-auth" in sys.argv:
         _test_auth()
     elif "--test-fetch" in sys.argv:
@@ -1187,7 +1252,7 @@ if __name__ == "__main__":
     elif "--reset-last-scanned" in sys.argv:
         _reset_last_scanned()
     elif "--wipe-and-rescan" in sys.argv:
-        _wipe_and_rescan()
+        _wipe_and_rescan(days=_days_back)
     elif "--test-dedup" in sys.argv:
         _test_dedup()
     elif "--test-reminder" in sys.argv:
@@ -1195,4 +1260,4 @@ if __name__ == "__main__":
     elif "--migrate-categories" in sys.argv:
         _migrate_categories()
     else:
-        main()
+        main(days_back=_days_back)

@@ -72,12 +72,28 @@ export default function DigestGroup({ group }) {
               Week of {new Date(week_of + 'T00:00:00').toLocaleDateString('en-CA', { month: 'long', day: 'numeric', year: 'numeric' })}
             </div>
           )}
-          {bullets.map((bullet, i) => (
-            <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
-              <span style={{ color: meta.color, flexShrink: 0, fontSize: 14, lineHeight: 1.6 }}>›</span>
-              <span style={{ fontSize: 13, color: '#9090a8', lineHeight: 1.6 }}>{bullet}</span>
-            </div>
-          ))}
+          {bullets.map((bullet, i) => {
+            const text = typeof bullet === 'string' ? bullet : bullet.text
+            const link = typeof bullet === 'string' ? null : bullet.link
+            return (
+              <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+                <span style={{ color: meta.color, flexShrink: 0, fontSize: 14, lineHeight: 1.6 }}>›</span>
+                <span style={{ fontSize: 13, color: '#9090a8', lineHeight: 1.6 }}>
+                  {text}
+                  {link && (
+                    <a
+                      href={link}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ marginLeft: 6, color: meta.color, fontSize: 12, textDecoration: 'none', opacity: 0.85 }}
+                    >
+                      ↗
+                    </a>
+                  )}
+                </span>
+              </div>
+            )
+          })}
         </div>
       </div>
     </div>

@@ -20,12 +20,12 @@ flowchart LR
     DigestEmail["📋 Digest email\n(Saturday)"]
     Parents["👨‍👩‍👧‍👦 Parents"]
 
-    Gmail -->|"incremental fetch (daily)\nfull 7-day fetch (Saturday)"| Scanner
-    Scanner -->|"events prompt (daily)\ndigest prompt (Saturday)"| Claude
+    Gmail -->|"incremental fetch (daily)\nfull SCAN_DAYS_BACK fetch (Saturday)"| Scanner
+    Scanner -->|"audit + events prompt (daily)\ndigest prompt (Saturday)"| Claude
     Claude -->|"events · dedup · digest groups"| Scanner
     Scanner -->|"PUT · 30s timeout · 3 retries"| JSONBin
     JSONBin -->|"GET · browser"| Frontend
-    Frontend <-->|"view · add · edit · dismiss\n(PIN-gated writes)"| Parents
+    Frontend <-->|"view · add · edit · dismiss · delete\n(PIN-gated writes)"| Parents
     Scanner -->|"Gmail SMTP · daily"| ReminderEmail
     Scanner -->|"Gmail SMTP · Saturday"| DigestEmail
     ReminderEmail --> Parents
@@ -38,8 +38,8 @@ The scanner runs daily at 7am via Mac launchd. The frontend is a static SPA — 
 
 ## Prerequisites
 
-- Python 3.11+
-- Node 18+
+- Python
+- Node
 - Firebase CLI (`npm install -g firebase-tools`)
 - A Google Cloud project with the **Gmail API** enabled and an OAuth 2.0 Desktop credentials file (`credentials.json`)
 - Accounts on: Anthropic, JSONBin.io, Firebase (see [docs/SERVICES.md](docs/SERVICES.md))
@@ -118,9 +118,10 @@ python scanner.py --test-dedup
 python scanner.py --test-reminder
 
 # Maintenance
-python scanner.py --reset-last-scanned   # Clear lastScanned so next run fetches 7 days back
-python scanner.py --wipe-and-rescan      # Clear all JSONBin data then run a fresh 7-day scan
-python scanner.py --migrate-categories   # One-time: rename legacy category values in JSONBin
+python scanner.py --reset-last-scanned        # Clear lastScanned so next run fetches SCAN_DAYS_BACK days
+python scanner.py --wipe-and-rescan           # Clear all JSONBin data then run a fresh scan
+python scanner.py --wipe-and-rescan --days 14 # Same but fetch 14 days (one-off, no config change)
+python scanner.py --migrate-categories        # One-time: rename legacy category values in JSONBin
 ```
 
 ---

@@ -60,7 +60,9 @@ export async function dismissEvent(eventId) {
 
 export async function deleteEvent(eventId) {
   const data = await loadData();
-  const events = data.events.filter((e) => e.id !== eventId);
+  const events = data.events.map((e) =>
+    e.id === eventId ? { ...e, deleted: true, deleted_at: new Date().toISOString() } : e
+  );
   await saveData({ ...data, events });
   return { ...data, events };
 }
