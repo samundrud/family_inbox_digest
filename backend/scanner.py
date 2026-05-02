@@ -9,6 +9,7 @@ import re
 import smtplib
 import sys
 import time
+import uuid
 from datetime import date, datetime, timedelta, timezone
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -255,7 +256,7 @@ Here are emails from the family inbox:
 
 Return ONLY a valid JSON object with exactly one key:
 
-"events": Array of important upcoming dates, deadlines, or required actions. For each:
+"events": Array of ALL upcoming dates, deadlines, and required actions extracted from these emails. Cast a wide net — it is always better to include too much than to miss something. For each:
   - id: unique string e.g. "evt_001"
   - title: concise name. When the actionable date is a deadline rather than the event itself, reflect that in the title e.g. "Summer BJJ Camp — Register by May 25" rather than just "Summer BJJ Camp".
   - date: YYYY-MM-DD, chosen by this priority order:
@@ -277,9 +278,10 @@ Return ONLY a valid JSON object with exactly one key:
   - dismissed: false
   - manually_added: false
 
+BEFORE writing your JSON, go through every numbered email above one by one — Email 1, Email 2, Email 3, and so on — and ask: does this email contain a payment, a date, a deadline, or any required action? If yes, it must appear in your events array. Do not skip any email. A $9 school payment request is just as required as a field trip permission form.
 IMPORTANT: If a single email mentions multiple distinct dates or events (e.g. a Pro-D day AND an early dismissal, OR an early dismissal AND a student-led conference), extract EACH as its own separate event entry. Never collapse two dates into one event. Never omit a second event from an email just because you already captured a first one from it.
-Include: picture day, field trips, permission slip deadlines, signup/registration deadlines, belt tests, tournaments, Pro-D day closures (no school = parent needs childcare), early dismissals (early pickup required), concerts, curriculum nights, fundraiser deadlines, scheduled meetings, practices or classes with a specific date or time, library or item pickup notifications (a hold is ready = go pick it up), any date requiring a parent to do something or be somewhere, personal reminders or family events sent directly by a parent, actionable items with no specific date (e.g. a form to return with no stated deadline) — include these with date: null.
-Omit: only content that has BOTH no action required AND no specific upcoming date (e.g. general newsletters with no dates, weekly roundups with no deadlines, photos or recaps with nothing for the parent to do). When in doubt, include.
+Include everything that has a date OR requires any action from a parent, no matter how small. This includes: picture day, field trips, permission slip deadlines, signup/registration deadlines, belt tests, tournaments, Pro-D day closures, early dismissals, concerts, curriculum nights, fundraiser deadlines, school program fees or payments (e.g. SchoolCash requests — even small amounts like $9), scheduled meetings, practices or classes with a specific date or time, library or item pickup notifications, any date requiring a parent to do something or be somewhere, personal reminders or family events sent directly by a parent, actionable items with no specific date (e.g. a form to return with no stated deadline) — include these with date: null.
+Omit ONLY content that has both no action required AND no specific date at all — e.g. a general newsletter with no deadlines, a photo recap with nothing to do. If there is any date or any action, include it. Do not filter based on perceived importance or dollar amount.
 
 Return ONLY valid JSON. No markdown fences. No preamble. No explanation.\
 """
@@ -359,6 +361,10 @@ def analyze_emails(emails: list[dict]) -> list[dict]:
     events = result.get("events", [])
 
     for event in events:
+        # Replace Claude's sequential IDs (evt_001, evt_002, ...) with unique IDs.
+        # Claude always starts at evt_001, which collides with IDs already in JSONBin.
+        event["id"] = f"evt_{uuid.uuid4().hex[:10]}"
+
         idx = event.pop("source_email_index", None)
         if idx is not None:
             try:
@@ -500,9 +506,21 @@ def merge_data(existing: dict, new_events: list[dict], new_digest_groups: list[d
     if expired:
         log.info("Auto-expired %d event(s) more than 2 days past their date", expired)
 
+    # Composite key: (source_message_id, title) prevents re-adding events from emails
+    # re-fetched by the 1-hour overlap buffer on consecutive scanner runs.
+    existing_keys = {
+        (e["source_message_id"], e["title"])
+        for e in kept_events
+        if e.get("source_message_id") and e.get("title")
+    }
     existing_ids = {e["id"] for e in kept_events}
+
     added_events: list[dict] = []
     for e in new_events:
+        msg_id = e.get("source_message_id")
+        title = e.get("title")
+        if msg_id and title and (msg_id, title) in existing_keys:
+            continue
         if e["id"] in existing_ids:
             continue
         if e.get("manually_added"):
