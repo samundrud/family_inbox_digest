@@ -11,8 +11,9 @@ A private family dashboard that reads a dedicated Gmail inbox where school and a
 
 ```mermaid
 flowchart LR
+    Scheduler["⏰ Cloud Scheduler\n(daily · 7am Pacific)"]
     Gmail["📧 Gmail inbox\n(family forwarding account)"]
-    Scanner["🖥️ scanner.py\n(Mac · launchd · 7am daily)"]
+    Scanner["☁️ scanner.py\n(Google Cloud Run Job)"]
     Claude["🤖 Claude Sonnet\n(Anthropic API · up to 3 passes)"]
     JSONBin["🗄️ JSONBin.io\n(data store)"]
     Frontend["📱 React SPA\n(Firebase Hosting · PIN-gated)"]
@@ -20,6 +21,7 @@ flowchart LR
     DigestEmail["📋 Digest email\n(Saturday)"]
     Parents["👨‍👩‍👧‍👦 Parents"]
 
+    Scheduler -->|"trigger"| Scanner
     Gmail -->|"incremental fetch (daily)\nfull SCAN_DAYS_BACK fetch (Saturday)"| Scanner
     Scanner -->|"audit + events prompt (daily)\ndigest prompt (Saturday)"| Claude
     Claude -->|"events · dedup · digest groups"| Scanner
@@ -32,17 +34,18 @@ flowchart LR
     DigestEmail --> Parents
 ```
 
-The scanner runs daily at 7am via Mac launchd. The frontend is a static SPA — no server required.
+The scanner runs as a Google Cloud Run Job triggered daily at 7am Pacific by Cloud Scheduler. The frontend is a static SPA — no server required.
 
 ---
 
 ## Prerequisites
 
-- Python
-- Node
+- Python 3.11+
+- Node.js 18+
 - Firebase CLI (`npm install -g firebase-tools`)
+- gcloud CLI (`brew install --cask google-cloud-sdk` on Mac)
 - A Google Cloud project with the **Gmail API** enabled and an OAuth 2.0 Desktop credentials file (`credentials.json`)
-- Accounts on: Anthropic, JSONBin.io, Firebase (see [docs/SERVICES.md](docs/SERVICES.md))
+- Accounts on: Anthropic, JSONBin.io, Firebase, Google Cloud (see [docs/SERVICES.md](docs/SERVICES.md))
 
 ---
 
@@ -92,7 +95,7 @@ npm run dev
 
 ---
 
-## Running the scanner
+## Running the scanner locally
 
 All commands run from the `backend/` directory with the virtualenv active.
 
@@ -109,6 +112,9 @@ python scanner.py --send-digest
 # Force send the day-before reminder email right now
 python scanner.py --send-reminder
 
+# Override the fetch window for this run only (default: SCAN_DAYS_BACK from config)
+python scanner.py --days 14
+
 # Smoke tests (run each independently to verify a step)
 python scanner.py --test-auth
 python scanner.py --test-fetch
@@ -120,8 +126,7 @@ python scanner.py --test-reminder
 # Maintenance
 python scanner.py --reset-last-scanned        # Clear lastScanned so next run fetches SCAN_DAYS_BACK days
 python scanner.py --wipe-and-rescan           # Clear all JSONBin data then run a fresh scan
-python scanner.py --wipe-and-rescan --days 14 # Same but fetch 14 days (one-off, no config change)
-python scanner.py --migrate-categories        # One-time: rename legacy category values in JSONBin
+python scanner.py --wipe-and-rescan --days 14 # Same but fetch 14 days
 ```
 
 ---
@@ -143,29 +148,36 @@ Refreshing any path does not 404 — SPA rewrites are configured in `firebase.js
 
 ---
 
-## Scheduler (Mac launchd)
+## Cloud Run (production scheduler)
 
-The scanner runs automatically on the first login of each day via a launchd plist (`RunAtLoad`). Subsequent logins the same day are skipped. A sentinel file (`~/Desktop/family-inbox/last-run-date`) tracks whether the scanner has already run today.
+The scanner runs in production as a Google Cloud Run Job triggered daily at 7am Pacific by Cloud Scheduler. Secrets (API keys, Gmail token) are stored in GCP Secret Manager and injected at runtime — nothing sensitive is baked into the container image.
 
-**Plist location:** `~/Library/LaunchAgents/com.familyinbox.scanner.plist`
-**Log file:** `~/Desktop/family-inbox/scanner.log`
+Key files:
+- `backend/Dockerfile` — container definition (Python 3.11-slim, installs requirements, copies scanner)
+- `backend/entrypoint.sh` — copies the read-only Gmail token secret to a writable path, then runs scanner.py
+- `backend/.dockerignore` — excludes `.env`, `credentials.json`, `token.json`, and `venv/` from the image
 
+**Manually trigger a run:**
 ```bash
-# Reload after editing the plist
-launchctl unload ~/Library/LaunchAgents/com.familyinbox.scanner.plist
-launchctl load ~/Library/LaunchAgents/com.familyinbox.scanner.plist
-
-# Verify it is registered
-launchctl list | grep familyinbox
-
-# Force an auto-style run right now (respects the sentinel — skips if already ran today)
-python scanner.py --auto
-
-# Delete today's sentinel to force a re-run on next login
-rm ~/Desktop/family-inbox/last-run-date
+gcloud run jobs execute family-inbox-scanner --region=us-west1 --wait
 ```
 
-**Required macOS permission:** System Settings → Privacy & Security → Full Disk Access → add `venv/bin/python3`. Without this the launchd job silently fails.
+**Update the container after changing scanner.py:**
+```bash
+cd backend
+gcloud builds submit . \
+  --tag="us-west1-docker.pkg.dev/YOUR_PROJECT_ID/family-inbox/scanner:latest"
+gcloud run jobs update family-inbox-scanner \
+  --image="us-west1-docker.pkg.dev/YOUR_PROJECT_ID/family-inbox/scanner:latest" \
+  --region=us-west1
+```
+
+**If token.json needs regeneration** (e.g. refresh token revoked):
+```bash
+cd backend && source venv/bin/activate
+python scanner.py --test-auth
+gcloud secrets versions add GMAIL_TOKEN_JSON --data-file=token.json
+```
 
 ---
 
@@ -182,8 +194,6 @@ rm ~/Desktop/family-inbox/last-run-date
 | `JSONBIN_API_KEY` | JSONBin master key |
 | `DIGEST_RECIPIENTS` | Comma-separated list of digest email recipients |
 | `FAMILY_CONTEXT` | Free-text description of children's schools/providers passed to Claude |
-| `LINEAR_API_KEY` | Linear API key (only needed for `linear_setup.py`) |
-| `LINEAR_TEAM_ID` | Linear team key, e.g. `FAM` |
 
 ### `frontend/.env`
 
@@ -192,6 +202,8 @@ rm ~/Desktop/family-inbox/last-run-date
 | `VITE_JSONBIN_BIN_ID` | Same bin ID as backend |
 | `VITE_JSONBIN_API_KEY` | Same master key as backend — escape `$` as `\$` (Vite runs dotenv-expand) |
 | `VITE_APP_PIN` | PIN required to make any write action on the dashboard |
+
+In production, all backend variables are stored in GCP Secret Manager and injected into the Cloud Run Job at runtime. The `.env` file is only used for local development.
 
 ---
 
@@ -202,8 +214,10 @@ family_inbox_digest/
 ├── backend/
 │   ├── scanner.py          # Main script: fetch → analyze → store → email
 │   ├── config.py           # All user-configurable settings
-│   ├── linear_setup.py     # One-time Linear ticket creator (not part of normal flow)
+│   ├── Dockerfile          # Cloud Run container definition
+│   ├── entrypoint.sh       # Container startup: writes token.json, runs scanner.py
 │   ├── requirements.txt
+│   ├── .dockerignore
 │   ├── credentials.json    # Gmail OAuth app credentials (do not commit)
 │   ├── token.json          # Gmail OAuth user token (do not commit, generated on first auth)
 │   ├── .env                # Secrets (do not commit)
@@ -221,7 +235,7 @@ family_inbox_digest/
 │   ├── .env
 │   └── .env.example
 ├── docs/
-│   ├── SERVICES.md         # All external services and cancellation info
+│   ├── SERVICES.md         # All external services and account details (do not commit)
 │   └── CLAUDE.md           # Codebase guide for AI-assisted development
 ├── firebase.json
 └── .firebaserc

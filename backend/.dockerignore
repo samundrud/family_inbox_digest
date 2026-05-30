@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+credentials.json
+token.json
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+linear_setup.py
