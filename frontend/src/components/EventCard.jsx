@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 
-const TODAY = new Date().toLocaleDateString('en-CA')
+const TODAY = import.meta.env.VITE_DEMO_TODAY || new Date().toLocaleDateString('en-CA')
 
 function daysUntil(dateStr) {
   const diff = new Date(dateStr) - new Date(TODAY)
@@ -31,7 +31,7 @@ const categoryColors = {
   other:          '#9090a8',
 }
 
-export default function EventCard({ event, onDismiss, onDelete, onEdit, isEditing, onEditStart, onEditCancel, requirePin }) {
+export default function EventCard({ event, onDismiss, onDelete, onEdit, isEditing, onEditStart, onEditCancel, requirePin, isDemo = false }) {
   const [form, setForm] = useState({
     title:    event.title    || '',
     date:     event.date     || '',
@@ -40,6 +40,13 @@ export default function EventCard({ event, onDismiss, onDelete, onEdit, isEditin
   })
   const [confirming, setConfirming] = useState(null) // null | 'dismiss' | 'delete'
   const [copied, setCopied] = useState(false)
+  const [demoTip, setDemoTip] = useState(null) // { label } — shown briefly when demo buttons are clicked
+
+  useEffect(() => {
+    if (!demoTip) return
+    const t = setTimeout(() => setDemoTip(null), 1800)
+    return () => clearTimeout(t)
+  }, [demoTip])
 
   function handleCopy() {
     navigator.clipboard.writeText(event.source_subject)
@@ -153,6 +160,7 @@ export default function EventCard({ event, onDismiss, onDelete, onEdit, isEditin
             href={event.link}
             target="_blank"
             rel="noopener noreferrer"
+            onClick={isDemo ? (e) => { e.preventDefault(); setDemoTip({ label: 'Open link' }) } : undefined}
             style={{ display: 'inline-block', marginTop: 8, fontSize: 12, fontWeight: 700, color: 'var(--accent)', textDecoration: 'none' }}
           >
             Open link →
@@ -161,7 +169,7 @@ export default function EventCard({ event, onDismiss, onDelete, onEdit, isEditin
       </div>
 
       {/* Action buttons / inline confirm */}
-      {confirming ? (
+      {confirming && !isDemo ? (
         <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end', minWidth: 90 }}>
           <span style={{ fontSize: 11, color: confirming === 'delete' ? '#f87171' : '#9090a8', textAlign: 'right', lineHeight: 1.4 }}>
             {confirming === 'dismiss' ? 'Mark as done?' : 'Delete event?'}
@@ -175,20 +183,45 @@ export default function EventCard({ event, onDismiss, onDelete, onEdit, isEditin
           </div>
         </div>
       ) : (
-        <div className="event-actions" style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0 }}>
-          {!dismissed && <button title="Edit" onClick={() => requirePin(() => onEditStart(event.id))} style={iconBtnStyle}>✎</button>}
+        <div className="event-actions" style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0, ...(isDemo && { opacity: 1 }) }}>
+          {isDemo && demoTip && (
+            <div style={{
+              position: 'absolute',
+              right: 'calc(100% + 10px)',
+              top: '50%',
+              transform: 'translateY(-50%)',
+              background: '#26263a',
+              border: '1px solid #3a3a52',
+              borderRadius: 8,
+              padding: '7px 11px',
+              whiteSpace: 'nowrap',
+              pointerEvents: 'none',
+              zIndex: 10,
+              lineHeight: 1.6,
+            }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: '#eaeaf4' }}>{demoTip.label}</div>
+              <div style={{ fontSize: 11, color: '#f0c040' }}>Disabled in demo mode</div>
+            </div>
+          )}
           {!dismissed && (
-            <button title="Mark as done" onClick={() => requirePin(() => setConfirming('dismiss'))} style={iconBtnStyle}>✓</button>
+            <button title="Edit"
+              onClick={isDemo ? () => setDemoTip({ label: 'Edit event' }) : () => requirePin(() => onEditStart(event.id))}
+              style={iconBtnStyle}>✎</button>
+          )}
+          {!dismissed && (
+            <button title="Mark as done"
+              onClick={isDemo ? () => setDemoTip({ label: 'Mark as done' }) : () => requirePin(() => setConfirming('dismiss'))}
+              style={iconBtnStyle}>✓</button>
           )}
           <button
             title="Delete"
-            onClick={() => requirePin(() => setConfirming('delete'))}
+            onClick={isDemo ? () => setDemoTip({ label: 'Delete event' }) : () => requirePin(() => setConfirming('delete'))}
             style={{ ...iconBtnStyle, color: '#f87171' }}
           >✕</button>
           {event.source_subject && (
             <button
               title={copied ? 'Copied!' : `Copy email subject: ${event.source_subject}`}
-              onClick={handleCopy}
+              onClick={isDemo ? () => setDemoTip({ label: 'Copy email subject' }) : handleCopy}
               style={{ ...iconBtnStyle, color: copied ? '#4ade80' : '#9090a8' }}
             >⎘</button>
           )}

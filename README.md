@@ -7,6 +7,20 @@ A private family dashboard that reads a dedicated Gmail inbox where school and a
 
 ---
 
+## Demo
+
+A read-only demo dashboard with anonymized sample data is hosted at **family-inbox-intelligence-demo.web.app** (live after FAM-34 is deployed).
+
+To build the demo bundle locally:
+
+```bash
+cd frontend && npm run build:mock
+```
+
+The demo uses hardcoded mock data frozen at 2026-05-30. All write actions show a "Disabled in demo mode" popover. No JSONBin credentials are required.
+
+---
+
 ## Architecture
 
 ```mermaid

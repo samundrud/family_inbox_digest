@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 
 const CATEGORY_META = {
   school:         { color: '#60a5fa', icon: '🏫' },
@@ -9,18 +9,43 @@ const CATEGORY_META = {
   other:          { color: '#9090a8', icon: '📬' },
 }
 
-export default function DigestGroup({ group }) {
+export default function DigestGroup({ group, isDemo = false }) {
   const { source, category, week_of, bullets = [] } = group
   const meta = CATEGORY_META[category] || CATEGORY_META.other
   const [expanded, setExpanded] = useState(() => window.innerWidth > 768)
+  const [demoTip, setDemoTip] = useState(false)
+
+  useEffect(() => {
+    if (!demoTip) return
+    const t = setTimeout(() => setDemoTip(false), 1800)
+    return () => clearTimeout(t)
+  }, [demoTip])
 
   return (
+    <div style={{ position: 'relative', marginBottom: 10 }}>
+      {isDemo && demoTip && (
+        <div style={{
+          position: 'absolute',
+          top: 10,
+          right: 10,
+          background: '#26263a',
+          border: '1px solid #3a3a52',
+          borderRadius: 8,
+          padding: '7px 11px',
+          whiteSpace: 'nowrap',
+          pointerEvents: 'none',
+          zIndex: 10,
+          lineHeight: 1.6,
+        }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: '#eaeaf4' }}>Open link</div>
+          <div style={{ fontSize: 11, color: '#f0c040' }}>Disabled in demo mode</div>
+        </div>
+      )}
     <div style={{
       background: '#1a1a24',
       border: '1px solid #26263a',
       borderLeft: `3px solid ${meta.color}`,
       borderRadius: 12,
-      marginBottom: 10,
       overflow: 'hidden',
     }}>
       {/* Header */}
@@ -85,6 +110,7 @@ export default function DigestGroup({ group }) {
                       href={link}
                       target="_blank"
                       rel="noopener noreferrer"
+                      onClick={isDemo ? (e) => { e.preventDefault(); setDemoTip(true) } : undefined}
                       style={{ marginLeft: 6, color: meta.color, fontSize: 12, textDecoration: 'none', opacity: 0.85 }}
                     >
                       ↗
@@ -96,6 +122,7 @@ export default function DigestGroup({ group }) {
           })}
         </div>
       </div>
+    </div>
     </div>
   )
 }

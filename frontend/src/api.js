@@ -1,3 +1,7 @@
+import { MOCK_DATA } from './mockData.js'
+
+const IS_DEMO = import.meta.env.VITE_DEMO_MODE === 'true'
+
 const BIN_ID = import.meta.env.VITE_JSONBIN_BIN_ID;
 const API_KEY = import.meta.env.VITE_JSONBIN_API_KEY;
 const BASE_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
@@ -24,6 +28,7 @@ async function checkResponse(resp, context) {
 // ---------------------------------------------------------------------------
 
 export async function loadData() {
+  if (IS_DEMO) return structuredClone(MOCK_DATA)
   const resp = await fetch(`${BASE_URL}/latest`, { headers: READ_HEADERS });
   await checkResponse(resp, "read");
   const json = await resp.json();
@@ -36,6 +41,7 @@ export async function loadData() {
 }
 
 export async function saveData(data) {
+  if (IS_DEMO) return
   const resp = await fetch(BASE_URL, {
     method: "PUT",
     headers: WRITE_HEADERS,
@@ -50,6 +56,7 @@ export async function saveData(data) {
 // ---------------------------------------------------------------------------
 
 export async function dismissEvent(eventId) {
+  if (IS_DEMO) return
   const data = await loadData();
   const events = data.events.map((e) =>
     e.id === eventId ? { ...e, dismissed: true } : e
@@ -59,6 +66,7 @@ export async function dismissEvent(eventId) {
 }
 
 export async function deleteEvent(eventId) {
+  if (IS_DEMO) return
   const data = await loadData();
   const events = data.events.map((e) =>
     e.id === eventId ? { ...e, deleted: true, deleted_at: new Date().toISOString() } : e
@@ -68,6 +76,7 @@ export async function deleteEvent(eventId) {
 }
 
 export async function addEvent(eventObj) {
+  if (IS_DEMO) return
   const data = await loadData();
   const newEvent = {
     ...eventObj,
@@ -81,6 +90,7 @@ export async function addEvent(eventObj) {
 }
 
 export async function updateEvent(eventId, fields) {
+  if (IS_DEMO) return
   const data = await loadData();
   const events = data.events.map((e) =>
     e.id === eventId ? { ...e, ...fields } : e

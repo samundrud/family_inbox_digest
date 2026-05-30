@@ -12,6 +12,7 @@ import DigestGroup  from './components/DigestGroup.jsx'
 import FilterPills  from './components/FilterPills.jsx'
 
 const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 }
+const IS_DEMO = import.meta.env.VITE_DEMO_MODE === 'true'
 
 // ---------------------------------------------------------------------------
 // Loading skeleton
@@ -160,7 +161,22 @@ export default function App() {
       <AppHeader
         lastScannedLabel={lastScannedLabel}
         onAddClick={() => requirePin(() => setShowAddForm(true))}
+        isDemo={IS_DEMO}
       />
+
+      {IS_DEMO && (
+        <div style={{
+          background: 'var(--surface)',
+          borderBottom: '1px solid #f0c04044',
+          padding: '7px 24px',
+          textAlign: 'center',
+          fontSize: 12,
+          color: 'var(--sub)',
+        }}>
+          <span style={{ color: 'var(--accent)', fontWeight: 700 }}>Demo mode</span>
+          {' · '}Sample data · Read-only preview
+        </div>
+      )}
 
       <div className="fadein" style={{ maxWidth: 820, margin: '0 auto', padding: '22px 16px' }}>
 
@@ -201,6 +217,7 @@ export default function App() {
                     onEditStart={setEditingEventId}
                     onEditCancel={() => setEditingEventId(null)}
                     requirePin={requirePin}
+                    isDemo={IS_DEMO}
                   />
                 ))
             }
@@ -212,7 +229,7 @@ export default function App() {
           <div>
             {visibleDigest.length === 0
               ? <EmptyState text="No digest yet. Run the scanner to generate summaries." />
-              : visibleDigest.map((g, i) => <DigestGroup key={i} group={g} />)
+              : visibleDigest.map((g, i) => <DigestGroup key={i} group={g} isDemo={IS_DEMO} />)
             }
           </div>
         )}
@@ -234,7 +251,15 @@ export default function App() {
 // Sub-components
 // ---------------------------------------------------------------------------
 
-function AppHeader({ lastScannedLabel, onAddClick }) {
+function AppHeader({ lastScannedLabel, onAddClick, isDemo }) {
+  const [demoTip, setDemoTip] = useState(false)
+
+  useEffect(() => {
+    if (!demoTip) return
+    const t = setTimeout(() => setDemoTip(false), 1800)
+    return () => clearTimeout(t)
+  }, [demoTip])
+
   return (
     <header style={{
       position: 'sticky', top: 0, zIndex: 100,
@@ -258,17 +283,37 @@ function AppHeader({ lastScannedLabel, onAddClick }) {
         </div>
       </div>
 
-      <button
-        onClick={onAddClick}
-        style={{
-          background: 'var(--accent)', color: '#000',
-          border: 'none', borderRadius: 8,
-          padding: '8px 16px', fontWeight: 700,
-          cursor: 'pointer', fontSize: 14, minHeight: 44,
-        }}
-      >
-        + Add Event
-      </button>
+      <div style={{ position: 'relative' }}>
+        {isDemo && demoTip && (
+          <div style={{
+            position: 'absolute',
+            right: 0,
+            top: 'calc(100% + 8px)',
+            background: '#26263a',
+            border: '1px solid #3a3a52',
+            borderRadius: 8,
+            padding: '7px 11px',
+            whiteSpace: 'nowrap',
+            pointerEvents: 'none',
+            zIndex: 10,
+            lineHeight: 1.6,
+          }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: '#eaeaf4' }}>Add event</div>
+            <div style={{ fontSize: 11, color: '#f0c040' }}>Disabled in demo mode</div>
+          </div>
+        )}
+        <button
+          onClick={isDemo ? () => setDemoTip(true) : onAddClick}
+          style={{
+            background: 'var(--accent)', color: '#000',
+            border: 'none', borderRadius: 8,
+            padding: '8px 16px', fontWeight: 700,
+            cursor: 'pointer', fontSize: 14, minHeight: 44,
+          }}
+        >
+          + Add Event
+        </button>
+      </div>
     </header>
   )
 }

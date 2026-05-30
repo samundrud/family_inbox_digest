@@ -79,13 +79,15 @@ flowchart TD
 
 | File | Purpose |
 |---|---|
-| `frontend/src/api.js` | All JSONBin read/write — `loadData`, `saveData`, `dismissEvent`, `deleteEvent`, `addEvent`, `updateEvent` |
-| `frontend/src/App.jsx` | Root component. All state, all handlers, PIN gate logic, top-level layout. |
+| `frontend/src/api.js` | All JSONBin read/write — `loadData`, `saveData`, `dismissEvent`, `deleteEvent`, `addEvent`, `updateEvent`. Guards every function with `IS_DEMO` so demo builds never call JSONBin. |
+| `frontend/src/App.jsx` | Root component. All state, all handlers, PIN gate logic, top-level layout. Renders demo banner and passes `isDemo` prop when `VITE_DEMO_MODE=true`. |
 | `frontend/src/index.css` | Design system: CSS variables, typography, layout, animations, skeleton loader |
-| `frontend/src/components/EventCard.jsx` | Single event card: display, inline edit, copy-subject button (⎘), "Open link →" action |
+| `frontend/src/components/EventCard.jsx` | Single event card: display, inline edit, copy-subject button (⎘), "Open link →" action. In demo mode, action buttons and links show a "Disabled in demo mode" popover instead of triggering. |
 | `frontend/src/components/AddEventForm.jsx` | Modal bottom-sheet form for manually adding events |
-| `frontend/src/components/DigestGroup.jsx` | Collapsible card showing weekly narrative bullets per sender |
+| `frontend/src/components/DigestGroup.jsx` | Collapsible card showing weekly narrative bullets per sender. In demo mode, digest links show a "Disabled in demo mode" popover. |
 | `frontend/src/components/FilterPills.jsx` | Category filter buttons (all / school / daycare / scouts / soccer / GFT / other) |
+| `frontend/src/mockData.js` | Anonymized sample data for the demo build. Dates are hardcoded relative to 2026-05-30. Never bundled in production builds (tree-shaken). |
+| `frontend/.env.mock` | Vite env file loaded by `build:mock`. Sets `VITE_DEMO_MODE=true` and `VITE_DEMO_TODAY=2026-05-30` to freeze urgency labels. Contains no secrets. |
 
 ---
 
