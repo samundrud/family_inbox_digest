@@ -222,3 +222,6 @@ docs/family-inbox-build-plan-v3-definitive.md
 
 # One-time setup script with family-specific info (school names, org details)
 backend/linear_setup.py
+
+# Firebase project config — contains project ID which reveals the private dashboard URL
+.firebaserc
