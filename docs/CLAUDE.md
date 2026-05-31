@@ -55,7 +55,7 @@ flowchart TD
 | Digest email | Gmail SMTP via `smtplib` + App Password |
 | Scheduler | Mac launchd (daily 7am) |
 | Frontend | React 19 + Vite 8 |
-| Frontend hosting | Firebase Hosting (static SPA) |
+| Frontend hosting | Firebase Hosting (static SPA · two sites: prod + demo) |
 | Project management | Linear (team key: FAM) |
 
 ---
@@ -267,4 +267,4 @@ Key paths on the local machine:
 - Frontend errors are caught by `api.js` functions and thrown as descriptive strings for the UI to display.
 - The frontend reads/writes JSONBin directly from the browser — there is no backend API server.
 - JSONBin requests use a 30s timeout with 3 automatic retries (3s delay between attempts).
-- `firebase deploy --only hosting` is the only deploy step. No CI/CD pipeline.
+- `firebase deploy --only hosting:prod` deploys the production dashboard; `firebase deploy --only hosting:demo` deploys the public demo. No CI/CD pipeline.

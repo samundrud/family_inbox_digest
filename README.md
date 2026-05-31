@@ -1,23 +1,28 @@
 # Family Inbox Intelligence
 
-A private family dashboard that reads a dedicated Gmail inbox where school and activity emails are forwarded. A Python scanner reads those emails, sends them to Claude, and extracts upcoming events and a weekly narrative digest. Results are stored in JSONBin and displayed in a React dashboard. Every Saturday morning a digest email is sent to both parents; a day-before reminder fires whenever an event is coming up the next day.
+Families with kids in school and activities get buried in emails — permission slips, picture day reminders, registration deadlines, soccer schedule changes. Most get skimmed and forgotten. This dashboard makes sure nothing falls through the cracks.
 
-**Users:** Two parents and their children.
-**Email sources:** All emails in the dedicated Gmail inbox are scanned. Family context configured via `FAMILY_CONTEXT` in `backend/.env`.
+Forward your school and activity emails to a dedicated inbox. Claude reads them every morning, pulls out every upcoming event and deadline, and surfaces them on a shared dashboard both parents can see from their phones. A day-before reminder lands in your inbox automatically. Every Saturday, a digest email summarises the week so you always know what's coming.
+
+**No more missed deadlines. No more "I thought you saw that email."**
 
 ---
 
-## Demo
+## Try the demo
 
-A read-only demo dashboard with anonymized sample data is hosted at **family-inbox-intelligence-demo.web.app** (live after FAM-34 is deployed).
+**[family-inbox-intelligence-demo.web.app](https://family-inbox-intelligence-demo.web.app)** — read-only, anonymized sample data, no sign-in required.
 
-To build the demo bundle locally:
+---
 
-```bash
-cd frontend && npm run build:mock
-```
+## What it does
 
-The demo uses hardcoded mock data frozen at 2026-05-30. All write actions show a "Disabled in demo mode" popover. No JSONBin credentials are required.
+| | |
+|---|---|
+| **Daily scan** | Reads new emails → Claude extracts events, dates, and links |
+| **Shared dashboard** | Both parents view, add, dismiss, and edit events from any device |
+| **Day-before reminders** | Automatic email the evening before any upcoming event |
+| **Saturday digest** | Weekly narrative summary grouped by school / activity / provider |
+| **No missed re-extractions** | Dismissed and deleted events are tombstoned so Claude never re-adds them |
 
 ---
 
@@ -147,18 +152,24 @@ python scanner.py --wipe-and-rescan --days 14 # Same but fetch 14 days
 
 ## Deploying the frontend
 
-```bash
-# 1. Build
-cd frontend && npm run build
+Two Firebase Hosting sites are configured: `prod` (private dashboard) and `demo` (public read-only).
 
-# 2. Deploy (run from project root)
+```bash
+# Deploy production
+cd frontend && npm run build
+cd .. && firebase deploy --only hosting:prod
+
+# Deploy demo
+cd frontend && npm run build:mock
+cd .. && firebase deploy --only hosting:demo
+
+# Deploy both at once
+cd frontend && npm run build && npm run build:mock
 cd .. && firebase deploy --only hosting
 ```
 
-Live URL is printed by Firebase CLI after deploy (`Hosting URL: https://...`).
-The project ID is configured in `.firebaserc`.
-
-Refreshing any path does not 404 — SPA rewrites are configured in `firebase.json`.
+Live URLs are printed by Firebase CLI after deploy.
+SPA rewrites are configured in `firebase.json` — refreshing any path does not 404.
 
 ---
 
