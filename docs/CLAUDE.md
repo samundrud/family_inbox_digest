@@ -53,7 +53,7 @@ flowchart TD
 | AI analysis | Anthropic Python SDK — model `claude-sonnet-4-6` |
 | Data store | JSONBin.io REST API (no database, no server) |
 | Digest email | Gmail SMTP via `smtplib` + App Password |
-| Scheduler | Mac launchd (daily 7am) |
+| Scheduler | Google Cloud Scheduler + Cloud Run Job (daily 7am Pacific) |
 | Frontend | React 19 + Vite 8 |
 | Frontend hosting | Firebase Hosting (static SPA · two sites: prod + demo) |
 | Project management | Linear (team key: FAM) |
@@ -193,7 +193,7 @@ Defined in `config.py`. The same keys are used in both backend (email body) and 
 
 ## PIN gate
 
-All write actions on the dashboard (add event, dismiss, delete, edit) require a PIN set via `VITE_APP_PIN` in `frontend/.env`. The PIN is checked on every page load — it is stored in React state only, not in sessionStorage or localStorage, so refreshing or opening a new tab always requires re-entry.
+All write actions on the dashboard (add event, dismiss, delete, edit) require a PIN set via `VITE_PIN_HASH` in `frontend/.env`. The value is the SHA-256 hex hash of the PIN — the raw PIN is never stored anywhere. The PIN is checked on every page load and stored in React state only (not sessionStorage or localStorage), so refreshing or opening a new tab always requires re-entry.
 
 ---
 
@@ -242,7 +242,7 @@ Mobile-first. All interactive elements min 44px touch target height.
 |---|---|
 | `VITE_JSONBIN_BIN_ID` | Same bin ID as backend |
 | `VITE_JSONBIN_API_KEY` | Same key as backend — escape every `$` as `\$` (Vite runs dotenv-expand) |
-| `VITE_APP_PIN` | PIN required to make any write action on the dashboard (React state only — no persistence) |
+| `VITE_PIN_HASH` | SHA-256 hex hash of the PIN required to make any write action on the dashboard (React state only — no persistence) |
 
 All actual values live in the `.env` files (gitignored). See `docs/SERVICES.md` for account details and infrastructure IDs.
 
@@ -253,8 +253,7 @@ All actual values live in the `.env` files (gitignored). See `docs/SERVICES.md` 
 All account details, project IDs, and live URLs are documented in `docs/SERVICES.md` (gitignored — contains private info).
 
 Key paths on the local machine:
-- launchd plist: `~/Library/LaunchAgents/com.familyinbox.scanner.plist`
-- Scanner log: `~/Desktop/family-inbox/scanner.log`
+- Scanner log (local runs): `~/Desktop/family-inbox/scanner.log`
 - Firebase project: configured in `.firebaserc`
 
 ---

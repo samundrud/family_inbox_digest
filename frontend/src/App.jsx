@@ -98,9 +98,7 @@ export default function App() {
       return a.date.localeCompare(b.date)
     })
 
-  const visibleDigest = (data.digestGroups || []).filter(
-    (g) => filter === 'all' || g.category === filter
-  )
+  const visibleDigest = data.digestGroups || []
 
   // Handlers
   async function handleDismiss(id) {
@@ -185,7 +183,7 @@ export default function App() {
           {['events', 'digest'].map((tab) => (
             <button
               key={tab}
-              onClick={() => setActiveTab(tab)}
+              onClick={() => { setActiveTab(tab); if (tab === 'digest') setFilter('all') }}
               style={{
                 flex: 1, border: 'none', borderRadius: 8, cursor: 'pointer',
                 fontWeight: 600, fontSize: 14, minHeight: 44, padding: '10px 0',
@@ -199,11 +197,10 @@ export default function App() {
           ))}
         </div>
 
-        <FilterPills active={filter} onChange={setFilter} />
-
         {/* Events tab */}
         {activeTab === 'events' && (
           <div>
+            <FilterPills active={filter} onChange={setFilter} />
             {visibleEvents.length === 0
               ? <EmptyState text="You're all clear! No upcoming events." />
               : visibleEvents.map((e) => (
