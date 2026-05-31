@@ -329,11 +329,13 @@ function EmptyState({ text }) {
 function PinModal({ onSuccess, onCancel }) {
   const [pin, setPin]     = useState('')
   const [error, setError] = useState(false)
-  const EXPECTED = import.meta.env.VITE_APP_PIN || ''
+  const EXPECTED_HASH = import.meta.env.VITE_PIN_HASH || ''
 
-  function handleSubmit(e) {
+  async function handleSubmit(e) {
     e.preventDefault()
-    if (pin === EXPECTED) { onSuccess() }
+    const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pin))
+    const hashHex = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('')
+    if (hashHex === EXPECTED_HASH) { onSuccess() }
     else { setError(true); setPin('') }
   }
 
